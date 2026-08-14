@@ -1,0 +1,31 @@
+paths:
+  merged_dir: <PROJECT_ROOT>\lowalt\quality\parking_map_e1\aoi_images_v1
+  results_root: sam3_runs
+
+sam3:
+  api_url: http://127.0.0.1:8000/sam3/segment
+  prompt_mode: batch
+  prompts:
+    - building
+    - public road
+  batch_name: parking_e1_exclusions_v1
+  timeout: 60
+  retry: 3
+  show_box: true
+
+infer:
+  save_render: true
+  save_mask: true
+  batch_concurrency: 2
+
+merge:
+  mask_iou_threshold: 0.55
+  bbox_iou_threshold: 0.65
+  representative: confidence
+  min_confidence: 0.0
+
+geo:
+  zoom: 19
+
+block:
+  pixel_size: 1024

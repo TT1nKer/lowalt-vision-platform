@@ -1,0 +1,129 @@
+# 高速公路路域施工机械巡检 profile
+# 用法：cp profiles/highway_machinery.yaml config.yaml  然后按需改
+
+paths:
+  merged_dir: imagery
+  results_root: sam3_runs
+  log_file: sam3_console.log
+
+sam3:
+  api_url: http://127.0.0.1:8000/sam3
+  show_box: true
+  timeout: 120
+  retry: 2
+  prompt_mode: batch
+  batch_name: highway_machinery_v1
+  text_prompt: target object
+  prompts:
+    - construction machinery
+    - road construction machinery
+    - highway construction equipment
+    - heavy equipment
+    - road maintenance equipment
+    - engineering vehicle
+    - excavator
+    - loader
+    - road roller
+    - paver
+    - grader
+    - milling machine
+
+infer:
+  workers: 8
+  save_render: true
+  save_mask: true
+
+merge:
+  mask_iou_threshold: 0.55
+  bbox_iou_threshold: 0.65
+  representative: confidence
+  min_confidence: 0.0
+
+geo:
+  zoom: 18
+
+block:
+  pixel_size: 1024
+
+aggregate:
+  min_confidence: 0.0
+  only_classes: []
+
+web:
+  workers: 8
+  bake_workers: 4
+
+gemma:
+  enabled: false
+  url: "http://127.0.0.1:9999/v1/chat/completions"
+  schema: openai
+  model: "/home/admin/models/gemma-4-31b-nvfp4"
+  api_key: ""
+  image_mode: both
+  crop_padding: 0.7
+  mask_style: outline
+  timeout: 120
+  editable_prompt: true
+  allowed_labels: []
+  structured_output: true
+  target_concept: "highway construction machinery and visually verifiable anomalies"
+  object_types:
+    - excavator
+    - loader
+    - road_roller
+    - paver
+    - grader
+    - milling_machine
+    - engineering_vehicle
+    - unknown_machine
+    - non_target
+  issue_types:
+    - normal
+    - illegal_parking
+    - boundary_violation
+    - visible_damage
+    - missing_safety_protection
+    - visible_leakage
+    - night_missing_warning
+    - unknown
+  condition_types:
+    - normal
+    - abnormal
+    - unknown
+  positive_rules:
+    - "target is a clearly visible construction machine or road maintenance equipment"
+    - "mask or OBB roughly covers the target body"
+    - "anomaly/violation must be directly visible from image pixels"
+  negative_rules:
+    - "regular cars, buses, trucks are NOT construction machinery"
+    - "guardrails, signs, cones, material piles, roadside equipment boxes are NOT machine bodies"
+    - "unclear target, heavy occlusion, or grossly misplaced mask — do NOT auto-accept"
+  unverifiable_rules:
+    - "operator certification status"
+    - "equipment overdue inspection"
+    - "brake system failure"
+    - "steering system failure"
+    - "internal hydraulic system failure"
+    - "internal electrical system failure"
+
+yolo_obb:
+  min_confidence: 0.0
+  min_mask_area: 10
+  class_names: []
+  class_source: "semantic.object_type"
+  require: {}
+  exclude_classes:
+    - non_target
+    - unknown_machine
+  split:
+    mode: stable_hash
+    train: 0.8
+    val: 0.1
+    test: 0.1
+    fixed_test_list: test_images.txt
+
+train:
+  model: yolov8n-seg.pt
+  imgsz: 1024
+  epochs: 100
+  model_mirrors: []

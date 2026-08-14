@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CLIP 视觉参考匹配</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  .thumb-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(100px, 1fr)); gap:4px; max-height:60vh; overflow:auto; }
+  .thumb-grid img { width:100%; height:80px; object-fit:cover; cursor:pointer; border:2px solid var(--line); border-radius:6px; transition:border-color .2s; }
+  .thumb-grid img:hover { border-color:var(--blue); }
+  .thumb-grid img.selected { border-color:var(--green); border-width:3px; }
+  .img-wrap { position:relative; display:inline-block; max-width:100%; margin-top:12px; cursor:crosshair; }
+  .img-wrap img { display:block; max-width:100%; max-height:70vh; border:2px solid var(--line); border-radius:8px; }
+  .img-wrap canvas { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; }
+  .info-bar { display:flex; gap:12px; align-items:center; margin:8px 0; }
+  .pager { display:flex; gap:6px; align-items:center; margin-bottom:8px; }
+  .pager button { padding:4px 12px; font-size:12px; }
+  .pager span { font-size:12px; color:var(--muted); }
+  .feat-card { background:var(--panel-2); border-radius:8px; padding:12px; margin:6px 0; display:flex; gap:12px; align-items:center; }
+  .feat-card img { width:64px; height:64px; object-fit:cover; border-radius:4px; }
+  .feat-card .info { flex:1; font-size:13px; }
+  .feat-card .info code { font-size:11px; color:var(--muted); }
+  .row { display:flex; gap:8px; align-items:center; }
+</style>
+</head>
+<body>
+<div class="top">
+  <div class="brand"><span class="dot"></span>CLIP 视觉参考匹配</div>
+  <div class="nav">
+    <a href="/">工作台</a>
+    <a href="/review">AI 审核</a>
+    <a href="/clip">CLIP 匹配</a>
+    <a href="/report">成果报告</a>
+    <a href="/test">模型测试</a>
+    <a href="/files">文件</a>
+  </div>
+</div>
+<div class="wrap">
+  <div class="row" style="margin-bottom:12px">
+    <div class="card s8">
+      <h2>浏览图片 · 画框注册</h2>
+      <div class="pager">
+        <button onclick="prevPage()">← 上一页</button>
+        <span id="page_info">0 / 0</span>
+        <button onclick="nextPage()">下一页 →</button>
+        <span class="muted small">共 <b id="total_count">?</b> 张</span>
+      </div>
+      <div class="thumb-grid" id="thumb_grid"></div>
+      <div class="img-wrap" id="img_wrap" style="display:none" onmousedown="bboxStart(event)" onmousemove="bboxMove(event)" onmouseup="bboxEnd(event)">
+        <img id="img_display">
+        <canvas id="bbox_cv" style="position:absolute;top:0;left:0;pointer-events:none"></canvas>
+      </div>
+      <div class="info-bar" id="info_bar" style="display:none">
+        <span class="muted small" id="bbox_info"></span>
+        <button class="primary" onclick="registerRef()">注册参考</button>
+        <button onclick="clearBbox()">清除选框</button>
+      </div>
+      <div class="muted small" style="margin-top:4px">
+        挑一张包含目标物体的图 → 鼠标拖拽画框圈出目标 → 注册为参考 → 扫描全图找相似物体
+      </div>
+    </div>
+
+    <div class="card s4">
+      <h2>已注册特征</h2>
+      <div id="feat_list" class="muted small">加载中…</div>
+    </div>
+  </div>
+
+  <div class="card s12" style="margin-top:12px">
+    <h2>全量扫描</h2>
+    <div class="muted small" style="margin-bottom:6px">注册参考特征后，扫描所有图片查找相似目标。结果自动进入审核流程。</div>
+    <div class="row">
+      <button class="primary" onclick="startScan()" id="scan_btn">🔍 全量扫描</button>
+      <span class="muted small" id="scan_status"></span>
+    </div>
+    <div id="scan_result" style="margin-top:8px;display:none"></div>
+  </div>
+
+  <div class="card s12">
+    <h2>任务进度</h2>
+    <div id="jobtext" class="muted small">暂无任务</div>
+    <div class="progress"><div id="jobbar" class="bar"></div></div>
+    <div id="joblog" class="logbox"></div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+<script>
+let IMAGES = [], TOTAL = 0, PAGE = 0, PER_PAGE = 60;
+let CUR_IMG = null, CUR_BBOX_PCT = null;  // bbox as [x1%,y1%,x2%,y2%] in 0..1
+let SELECTED_FEATURE = null;
+let _dragStart = null;
+
+async function loadPage(offset) {
+  PAGE = Math.max(0, Math.floor(offset / PER_PAGE));
+  const r = await apiGet('/api/images/browse?offset=' + (PAGE * PER_PAGE) + '&limit=' + PER_PAGE);
+  if (!r.ok) return;
+  IMAGES = r.images; TOTAL = r.total;
+  $('#total_count').textContent = TOTAL;
+  $('#page_info').textContent = `${PAGE * PER_PAGE + 1}-${Math.min((PAGE+1)*PER_PAGE, TOTAL)} / ${TOTAL}`;
+  const grid = $('#thumb_grid');
+  grid.innerHTML = '';
+  for (const img of IMAGES) {
+    const el = document.createElement('img');
+    el.src = `/api/images/file/${img.name}`;
+    el.setAttribute('data-name', img.name);
+    el.onclick = () => openImage(img.name);
+    grid.appendChild(el);
+  }
+}
+function prevPage() { if (PAGE > 0) loadPage((PAGE - 1) * PER_PAGE); }
+function nextPage() { if ((PAGE + 1) * PER_PAGE < TOTAL) loadPage((PAGE + 1) * PER_PAGE); }
+
+// ---- Image + bbox (overlay canvas, no image redraw) ----
+function openImage(name) {
+  CUR_IMG = name; CUR_BBOX_PCT = null;
+  document.querySelectorAll('#thumb_grid img').forEach(el => el.classList.toggle('selected', el.getAttribute('data-name') === name));
+
+  const wrap = $('#img_wrap');
+  wrap.style.display = 'inline-block';
+  const img = $('#img_display');
+  img.onload = () => { fitOverlay(); drawBbox(); };
+  img.onerror = () => { $('#img_wrap').style.display = 'none'; alert('图片加载失败'); };
+  img.src = `/api/images/file/${name}`;
+  $('#info_bar').style.display = 'none';
+}
+
+function fitOverlay() {
+  const img = $('#img_display');
+  const cv = $('#bbox_cv');
+  const rect = img.getBoundingClientRect();
+  const parentRect = img.parentElement.getBoundingClientRect();
+  // position canvas exactly over the displayed image
+  cv.style.width = rect.width + 'px';
+  cv.style.height = rect.height + 'px';
+  cv.style.left = (rect.left - parentRect.left) + 'px';
+  cv.style.top = (rect.top - parentRect.top) + 'px';
+  cv.width = rect.width;
+  cv.height = rect.height;
+}
+
+function imgPos(e) {
+  const img = $('#img_display');
+  const rect = img.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left) / rect.width,   // 0..1
+    y: (e.clientY - rect.top) / rect.height,    // 0..1
+  };
+}
+
+function absBbox() {
+  // convert pct bbox to absolute image pixel coords (for CLIP API)
+  const img = $('#img_display');
+  if (!CUR_BBOX_PCT || !img.naturalWidth) return null;
+  return [
+    Math.round(CUR_BBOX_PCT[0] * img.naturalWidth),
+    Math.round(CUR_BBOX_PCT[1] * img.naturalHeight),
+    Math.round(CUR_BBOX_PCT[2] * img.naturalWidth),
+    Math.round(CUR_BBOX_PCT[3] * img.naturalHeight),
+  ];
+}
+
+function drawBbox() {
+  const cv = $('#bbox_cv');
+  if (!cv) return;
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  if (!CUR_BBOX_PCT) return;
+  const x = CUR_BBOX_PCT[0] * cv.width;
+  const y = CUR_BBOX_PCT[1] * cv.height;
+  const w = (CUR_BBOX_PCT[2] - CUR_BBOX_PCT[0]) * cv.width;
+  const h = (CUR_BBOX_PCT[3] - CUR_BBOX_PCT[1]) * cv.height;
+  ctx.strokeStyle = '#00ff00'; ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, w, h);
+}
+
+// ---- Mouse events on img_wrap ----
+function bboxStart(e) {
+  const p = imgPos(e);
+  _dragStart = p;
+  CUR_BBOX_PCT = null;
+  e.preventDefault();
+}
+function bboxMove(e) {
+  if (!_dragStart) return;
+  const p = imgPos(e);
+  CUR_BBOX_PCT = [
+    Math.min(_dragStart.x, p.x),
+    Math.min(_dragStart.y, p.y),
+    Math.max(_dragStart.x, p.x),
+    Math.max(_dragStart.y, p.y),
+  ];
+  drawBbox();
+}
+function bboxEnd(e) {
+  _dragStart = null;
+  if (CUR_BBOX_PCT) {
+    const abs = absBbox();
+    $('#bbox_info').textContent = `选框: [${abs.join(', ')}]`;
+    $('#info_bar').style.display = 'flex';
+  }
+}
+
+function clearBbox() { CUR_BBOX_PCT = null; drawBbox(); $('#info_bar').style.display = 'none'; }
+
+// ---- Register ----
+async function registerRef() {
+  if (!CUR_IMG || !CUR_BBOX_PCT) { alert('请先选择图片并画框'); return; }
+  const abs = absBbox();
+  if (!abs) { alert('图片未加载完'); return; }
+  const r = await apiPost('/api/clip/register', { image: CUR_IMG, bbox: abs });
+  if (!r.ok) { alert('注册失败: ' + (r.error || '未知错误')); return; }
+  alert('注册成功! feature_id: ' + r.feature_id);
+  SELECTED_FEATURE = r.feature_id;
+  loadFeatures();
+}
+
+// ---- Features ----
+async function loadFeatures() {
+  const r = await apiGet('/api/clip/features');
+  const div = $('#feat_list');
+  if (!r.ok) { div.textContent = '错误: ' + (r.error || ''); return; }
+  if (!r.features || !r.features.length) { div.textContent = '暂无注册特征'; return; }
+  div.innerHTML = r.features.map(f => `
+    <div class="feat-card">
+      <div style="width:64px;height:64px;background:var(--line);border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:24px">🔬</div>
+      <div class="info">
+        <div><code>${f.feature_id}</code></div>
+        <div>面积: ${f.mask_area || '?'} px · ${f.created_at || ''}</div>
+        <div style="margin-top:4px">
+          <button class="small" onclick="delFeature('${f.feature_id}')">删除</button>
+        </div>
+      </div>
+    </div>
+  `).join('');
+  if (!SELECTED_FEATURE && r.features.length) SELECTED_FEATURE = r.features[0].feature_id;
+}
+
+async function delFeature(fid) {
+  if (!confirm('删除特征 ' + fid + ' ？')) return;
+  const r = await apiDel('/api/clip/feature/' + fid);
+  if (!r.ok) { alert(r.error); return; }
+  if (SELECTED_FEATURE === fid) SELECTED_FEATURE = null;
+  loadFeatures();
+}
+
+// ---- Scan ----
+async function startScan() {
+  if (!SELECTED_FEATURE) { alert('请先注册参考特征'); return; }
+  $('#scan_btn').disabled = true;
+  $('#scan_status').textContent = '启动中…';
+  const r = await apiPost('/api/clip/scan', { feature_id: SELECTED_FEATURE });
+  if (!r.ok) { alert('启动失败: ' + (r.error || '')); $('#scan_btn').disabled = false; return; }
+  $('#scan_status').textContent = 'Job: ' + r.job_id;
+  pollJob(r.job_id, () => {
+    $('#scan_btn').disabled = false;
+    $('#scan_status').textContent = '扫描完成。去审核页查看结果 →';
+    rebuildIndex();
+  });
+}
+
+async function rebuildIndex() {
+  const r = await apiPost('/api/job/start', { action: 'p2_index' });
+  if (r.ok && r.job_id) {
+    $('#scan_status').textContent += ' 正在更新索引…';
+    pollJob(r.job_id, () => { $('#scan_status').textContent += ' 索引已更新'; });
+  }
+}
+
+function pollJob(jid, onDone) {
+  const intv = setInterval(async () => {
+    const s = await apiGet('/api/job/status/' + jid);
+    const txt = $('#jobtext'), log = $('#joblog'), bar = $('#jobbar');
+    if (txt) txt.textContent = s.action + ': ' + (s.status || '');
+    if (bar) bar.style.width = (s.progress || 0) + '%';
+    if (log && s.log) { log.textContent = s.log.slice(-8).join('\n'); log.scrollTop = log.scrollHeight; }
+    if (s.status === 'done' || s.status === 'error') {
+      if (s.error) { alert('任务失败: ' + s.error); }
+      clearInterval(intv);
+      if (onDone) onDone();
+    }
+  }, 1000);
+}
+
+async function apiDel(url) {
+  const r = await fetch(url, { method: 'DELETE' });
+  return r.json();
+}
+
+loadPage(0);
+loadFeatures();
+window.addEventListener('resize', () => { if (CUR_IMG) { fitOverlay(); drawBbox(); } });
+</script>
+</body>
+</html>

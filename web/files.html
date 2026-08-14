@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>文件与数据 · 低空遥感视觉AI自动化标注训练系统</title>
+<link rel="stylesheet" href="/static/app.css?v=20260717e">
+</head>
+<body>
+<div class="top">
+  <div class="brand"><span class="dot"></span>低空遥感视觉AI自动化标注训练系统</div>
+  <div class="nav">
+    <a href="/">工作台</a>
+    <a href="/review">AI 审核</a>
+    <a href="/report">成果报告</a>
+    <a href="/test">模型测试</a>
+    <a href="/files">文件</a>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="grid">
+    <div class="card s12">
+      <h2>文件与目录</h2>
+      <div id="filelist"></div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js?v=20260717e"></script>
+<script>
+async function load() {
+  let d;
+  try { d = await apiGet('/api/files'); } catch (e) {
+    const box = $('#filelist'); clear(box);
+    box.appendChild(el('div', { class: 'muted', text: '文件状态加载失败：' + e }));
+    return;
+  }
+  const box = $('#filelist'); clear(box);
+  d.items.forEach(it => {
+    box.appendChild(el('div', { class: 'stat' }, [
+      el('span', { class: 'k', text: it.key }),
+      el('span', { class: 'v', style: 'flex:1', text: it.path }),
+      el('span', { class: 'pill ' + (it.exists ? 'good' : 'bad'), text: it.exists ? '存在' : '缺失' }),
+    ]));
+  });
+}
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>

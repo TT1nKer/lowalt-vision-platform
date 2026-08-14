@@ -1,0 +1,24 @@
+paths:
+  merged_dir: <PROJECT_ROOT>\lowalt\quality\parking_merged_band_images
+  results_root: sam3_runs
+
+sam3:
+  api_url: http://127.0.0.1:8000/sam3/segment
+  prompt_mode: batch
+  prompts:
+    - building
+  batch_name: parking_merged_building_exclusions
+  timeout: 60
+  retry: 2
+  show_box: false
+
+infer:
+  save_render: false
+  save_mask: true
+  batch_concurrency: 1
+
+geo:
+  zoom: 19
+
+block:
+  pixel_size: 1024

@@ -1,0 +1,741 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI 审核 · 低空遥感视觉AI自动化标注训练系统</title>
+<link rel="stylesheet" href="/static/app.css?v=20260717e">
+</head>
+<body>
+<div class="top">
+  <div class="brand"><span class="dot"></span>低空遥感视觉AI自动化标注训练系统</div>
+  <div class="nav">
+    <a href="/">工作台</a>
+    <a href="/review">AI 审核</a>
+    <a href="/report">成果报告</a>
+    <a href="/test">模型测试</a>
+    <a href="/files">文件</a>
+  </div>
+</div>
+
+<div class="wrap">
+  <div id="root"></div>
+</div>
+
+<script src="/static/app.js?v=20260717e"></script>
+<script>
+// 状态
+let MODE = new URLSearchParams(location.search).get('mode') || 'all';
+let IDX = parseInt(new URLSearchParams(location.search).get('i') || '0', 10) || 0;
+let CUR = null;          // 当前 target 数据
+let LABELS = [];
+const UNDO_STACK = [];
+const LABEL_CLASS = {
+  accept: 'tag-green', hard_positive: 'tag-green',
+  reject: 'tag-red', bad_mask: 'tag-red',
+  hard_negative: 'tag-yellow', empty_ok: 'tag-yellow',
+  needs_review: 'tag-purple',
+};
+const MODE_NAMES = { all: '全部', unreviewed: '未筛选' };
+const LABEL_NAMES = {
+  accept: '接受', reject: '拒绝', hard_positive: '困难正样本',
+  hard_negative: '困难负样本', needs_review: '需要复核',
+  bad_mask: '掩膜异常', empty_ok: '确认空背景',
+};
+
+// 框层显示状态：掩膜 / 正框 / 旋转框 / 轮廓
+let SHOW = { mask: true, aabb: true, obb: true, contour: false };
+let RUNS = [];          // 所有 prompt/run
+let CUR_PROMPT = '';    // 当前选中的 prompt
+let GEOM_CACHE = {};    // overlay_file -> geom(坐标)，避免重复请求
+
+// 切换当前 prompt（只筛这个 run）
+async function changePrompt(p) {
+  if (p === CUR_PROMPT) return;
+  const result = await apiPost('/api/runs/select', { prompt: p });
+  if (!result.ok) { toast(result.error || '切换任务空间失败', 'err'); load(); return; }
+  CUR_PROMPT = p; MODE = 'all'; IDX = 0;
+  GEOM_CACHE = {};
+  load();
+}
+
+// 切换图层显隐：掩膜层切 display，框/轮廓重画 canvas（都不重新请求图）
+function applyLayers() {
+  const mask = document.querySelector('.layer-mask');
+  if (mask) mask.style.display = SHOW.mask ? 'block' : 'none';
+  const canvas = document.getElementById('boxCanvas');
+  const base = document.querySelector('.layer-base');
+  if (canvas && base && base.complete) drawBoxes(canvas, base);
+}
+
+// 取某目标的几何坐标（带缓存）
+async function fetchGeom(overlayFile) {
+  if (GEOM_CACHE[overlayFile]) return GEOM_CACHE[overlayFile];
+  try {
+    const g = await apiGet('/cache/geom/' + encodeURIComponent(overlayFile));
+    GEOM_CACHE[overlayFile] = g;
+    return g;
+  } catch (e) { return null; }
+}
+
+// 在 canvas 上按坐标画正框/旋转框/轮廓（坐标是掩膜像素系，按显示尺寸缩放）
+async function drawBoxes(canvas, baseImg) {
+  if (!CUR) return;
+  const dispW = baseImg.clientWidth, dispH = baseImg.clientHeight;
+  if (!dispW || !dispH) return;
+  canvas.width = dispW; canvas.height = dispH;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, dispW, dispH);
+
+  const g = await fetchGeom(CUR.overlay_file);
+  if (!g) return;
+  // 坐标基准：geom 里的 w/h（掩膜尺寸）。bbox 是原图像素，通常与掩膜一致；
+  // 用 baseImg.naturalWidth 做缩放最稳妥。
+  const natW = baseImg.naturalWidth || g.w || dispW;
+  const natH = baseImg.naturalHeight || g.h || dispH;
+  const sx = dispW / natW, sy = dispH / natH;
+
+  if (SHOW.aabb && g.bbox && g.bbox.length === 4) {
+    const [x1, y1, x2, y2] = g.bbox;
+    ctx.strokeStyle = 'rgba(255,70,70,0.95)'; ctx.lineWidth = 2;
+    ctx.strokeRect(x1 * sx, y1 * sy, (x2 - x1) * sx, (y2 - y1) * sy);
+  }
+  if (SHOW.obb && g.obb) {
+    ctx.strokeStyle = 'rgba(60,220,60,0.95)'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    g.obb.forEach((p, i) => { const x = p[0] * sx, y = p[1] * sy; i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+    ctx.closePath(); ctx.stroke();
+  }
+  if (SHOW.contour && g.contour) {
+    ctx.strokeStyle = 'rgba(0,200,255,0.95)'; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    g.contour.forEach((p, i) => { const x = p[0] * sx, y = p[1] * sy; i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+    ctx.closePath(); ctx.stroke();
+  }
+}
+
+function setUrl() {
+  const u = new URL(location.href);
+  u.searchParams.set('mode', MODE);
+  u.searchParams.set('i', IDX);
+  history.replaceState(null, '', u);
+}
+
+async function loadRuns() {
+  try {
+    const d = await apiGet('/api/runs');
+    RUNS = d.runs || [];
+    CUR_PROMPT = d.current || '';
+  } catch (e) {}
+}
+
+// 真正无损放大：把当前的图层(原图 + 掩膜PNG + 框/轮廓矢量)原样塞给 lightbox，
+// 不做 toDataURL/JPEG 重编码，base 始终是浏览器原生 PNG/JPEG，框是 canvas 矢量。
+async function openComposeLightbox(t) {
+  const baseSrc = '/media/image/' + encodeURIComponent(t.image);
+  const maskSrc = '/cache/layer/' + encodeURIComponent(t.overlay_file);
+  const geom = await fetchGeom(t.overlay_file);
+  openLayeredLightbox(
+    { baseSrc, maskSrc, geom, show: Object.assign({}, SHOW) },
+    t.image + ' · 目标 #' + t.target_index,
+  );
+}
+
+function loadImage(src) {
+  return new Promise((res, rej) => {
+    const im = new Image();
+    im.onload = () => res(im);
+    im.onerror = rej;
+    im.src = src;
+  });
+}
+
+let SEM_FILTERS = {};
+
+function applySemFilter() {
+  SEM_FILTERS = {};
+  const obj = $('#sfObjType'); if (obj && obj.value) SEM_FILTERS.sem_object_type = obj.value;
+  const issue = $('#sfIssueType'); if (issue && issue.value) SEM_FILTERS.sem_issue_type = issue.value;
+  const ver = $('#sfVerifiable'); if (ver && ver.value) SEM_FILTERS.sem_verifiable = ver.value;
+  const hits = $('#sfMinHits'); if (hits && parseInt(hits.value) > 0) SEM_FILTERS.min_prompt_hits = parseInt(hits.value);
+  const conf = $('#sfMinConf'); if (conf && parseFloat(conf.value) > 0) SEM_FILTERS.min_confidence = parseFloat(conf.value);
+  IDX = 0; MODE = 'all';
+  load();
+}
+
+function _buildSemQuery() {
+  const parts = [];
+  if (SEM_FILTERS.sem_object_type) parts.push('sem_object_type=' + encodeURIComponent(SEM_FILTERS.sem_object_type));
+  if (SEM_FILTERS.sem_issue_type) parts.push('sem_issue_type=' + encodeURIComponent(SEM_FILTERS.sem_issue_type));
+  if (SEM_FILTERS.sem_verifiable) parts.push('sem_verifiable=' + encodeURIComponent(SEM_FILTERS.sem_verifiable));
+  if (SEM_FILTERS.min_prompt_hits) parts.push('min_prompt_hits=' + SEM_FILTERS.min_prompt_hits);
+  if (SEM_FILTERS.min_confidence) parts.push('min_confidence=' + SEM_FILTERS.min_confidence);
+  return parts.length ? '&' + parts.join('&') : '';
+}
+
+async function load() {
+  let d;
+  const sq = _buildSemQuery();
+  try { d = await apiGet(`/api/review?mode=${encodeURIComponent(MODE)}&i=${IDX}${sq}`); }
+  catch (e) {
+    const root = $('#root'); clear(root);
+    root.appendChild(el('div', { class: 'card' }, [
+      el('h2', { text: '加载失败' }),
+      el('div', { class: 'muted', text: 'API 错误: ' + (e.message || e) }),
+      el('div', { class: 'spacer' }),
+      el('a', { class: 'btn', href: '/review' }, ['重试']),
+    ]));
+    return;
+  }
+  LABELS = d.labels || [];
+  if (d.empty) { renderEmpty(); return; }
+  IDX = d.i; CUR = d.target;
+  setUrl();
+  render(d);
+  prefetchNearby();
+  if (AUTO_GEMMA) askGemma();
+}
+
+// 预取：顺序模式按方向加权（前方多、后方少）；随机模式预取一批随机未筛选目标。
+// 同时把浏览状态（位置/方向/随机批）汇报给后台预热队列驱动优先级。
+let LAST_DIR = 1;          // 最近翻页方向 +1/-1
+let RANDOM_BATCH = [];     // 随机模式下预测的下一批目标 id
+
+async function prefetchNearby() {
+  try {
+    if (RANDOM_MODE) {
+      // 随机模式：取一批随机未筛选目标，精确预热 + 喂给后台队列
+      const d = await apiGet('/api/review/random_batch?n=50');
+      (d.files || []).slice(0, 50).forEach(fn => { const im = new Image(); im.src = '/cache/layer/' + encodeURIComponent(fn); });
+      RANDOM_BATCH = d.ids || [];
+      apiPost('/api/bake/cursor', { i: IDX, direction: LAST_DIR, mode: MODE, random_ids: RANDOM_BATCH });
+    } else {
+      // 顺序模式：前方 radius 大、后方小
+      const d = await apiGet(`/api/review/prefetch?mode=${encodeURIComponent(MODE)}&i=${IDX}&radius=3${_buildSemQuery()}`);
+      (d.files || []).forEach(fn => { const im = new Image(); im.src = '/cache/layer/' + encodeURIComponent(fn); });
+      apiPost('/api/bake/cursor', { i: IDX, direction: LAST_DIR, mode: MODE, random_ids: [] });
+    }
+  } catch (e) {}
+}
+
+function renderEmpty() {
+  const root = $('#root'); clear(root);
+  root.appendChild(el('div', { class: 'card' }, [
+    el('h2', { text: '没有可筛选的 target' }),
+    el('div', { class: 'muted', text: '请先在总控台构建 target 索引。掩膜预览现在会在你翻到时即时生成，无需预先批量生成。' }),
+    el('div', { class: 'spacer' }),
+    el('a', { class: 'btn', href: '/' }, ['返回总控台']),
+  ]));
+}
+
+function gotoIdx(i) {
+  if (i > IDX) LAST_DIR = 1;
+  else if (i < IDX) LAST_DIR = -1;
+  IDX = i; load();
+}
+function changeMode(m) { MODE = m; IDX = 0; load(); }
+
+async function labelCur(label) {
+  if (!CUR) return;
+  const note = $('#note') ? $('#note').value : '';
+  let d;
+  const previous = { target_id: CUR.target_id, label: CUR.label || '', note: CUR.note || '', mode: MODE, i: IDX };
+  try {
+    d = await apiPost('/api/label', { target_id: CUR.target_id, label, note });
+  } catch (e) {
+    toast('保存失败：' + e, 'err'); return;
+  }
+  if (!d || !d.ok) { toast((d && d.error) || '保存失败', 'err'); return; }
+  UNDO_STACK.push(previous);
+  if (UNDO_STACK.length > 30) UNDO_STACK.shift();
+  toast('已标记：' + (LABEL_NAMES[label] || label), 'ok');
+
+  if (RANDOM_MODE) { gotoRandom(); return; }
+  if ($('#autoNext') && $('#autoNext').checked) gotoIdx(MODE === 'unreviewed' ? IDX : IDX + 1);
+  else load();
+}
+
+async function undoLastLabel() {
+  const previous = UNDO_STACK.pop();
+  if (!previous) { toast('没有可撤销的标注', 'info'); return; }
+  const result = await apiPost('/api/label', {
+    target_id: previous.target_id, label: previous.label, note: previous.note,
+  });
+  if (!result.ok) { UNDO_STACK.push(previous); toast(result.error || '撤销失败', 'err'); return; }
+  MODE = previous.mode; IDX = previous.i;
+  toast('已撤销上一条标注', 'info');
+  load();
+}
+
+// 随机跳到一个未筛选 target
+let RANDOM_MODE = false;
+let AUTO_GEMMA = false;     // 每张图自动问 Gemma
+let GEMMA_INFLIGHT = false; // 防止快速翻页时并发请求
+async function gotoRandom() {
+  let d;
+  const sq = _buildSemQuery();
+  try { d = await apiGet(`/api/review/random_unreviewed?mode=${encodeURIComponent(MODE)}${sq}`); }
+  catch (e) { toast('随机跳转失败', 'err'); return; }
+  if (d.done) { toast('所有 target 都已筛选完成 🎉', 'info'); return; }
+  MODE = d.mode; IDX = d.i;
+  load();
+}
+
+// 请求 Gemma 对当前 target 给建议标签，并把对应按钮高亮预选
+async function askGemma() {
+  if (!CUR || GEMMA_INFLIGHT) return;
+  const stat = $('#gemmaStat'); if (stat) stat.textContent = 'Gemma 思考中...';
+  GEMMA_INFLIGHT = true;
+  const askingTid = CUR.target_id;
+  let r;
+  try {
+    r = await apiGet('/api/gemma/suggest?target_id=' + encodeURIComponent(CUR.target_id));
+  } catch (e) {
+    GEMMA_INFLIGHT = false;
+    if (stat) stat.textContent = 'Gemma 调用失败';
+    return;
+  }
+  GEMMA_INFLIGHT = false;
+  // 期间用户翻页了就丢弃这次结果
+  if (!CUR || CUR.target_id !== askingTid) return;
+  if (!r.ok) {
+    if (stat) stat.textContent = 'Gemma: ' + (r.error || '失败');
+    return;
+  }
+  if (!r.label) {
+    if (stat) stat.textContent = 'Gemma 回复无法识别：' + (r.raw || '');
+    return;
+  }
+  if (stat) stat.textContent = 'Gemma 建议：' + r.label;
+  // 给该标签按钮加个 "suggested" 视觉提示（边框加粗 + 提示文字）
+  const btns = document.querySelectorAll('#labelBtns button');
+  btns.forEach(b => {
+    b.classList.remove('suggested');
+    if (b.getAttribute('data-label') === r.label) b.classList.add('suggested');
+  });
+}
+
+// ===================== Prompt 编辑器 =====================
+
+let PROMPT_CACHE = null;   // {template, builtin, editable, source, file_path, concept, labels}
+
+async function openPromptEditor() {
+  let info;
+  try { info = await apiGet('/api/gemma/prompt'); }
+  catch (e) { toast('读取提示词失败: ' + e, 'err'); return; }
+  PROMPT_CACHE = info;
+  _ensurePromptModal();
+  const isStructured = info.structured_output;
+  // 填初值
+  $('#peTemplate').value = isStructured ? (info.structured_prompt || '') : (info.template || '');
+  $('#peSource').textContent = '当前来源：' + ({
+    builtin: '代码内置默认',
+    config: isStructured ? 'config.yaml（结构化语义输出）' : 'config.yaml 里的 gemma.prompt',
+    file: '当前 run 的 gemma_prompt.txt（你之前保存的）',
+  }[info.source] || info.source);
+  $('#peConcept').textContent = (isStructured ? '目标概念 = ' : '当前概念（{concept}）= ') + (info.concept || '');
+  $('#peLabels').textContent = '可用标签（{labels}）= ' + info.labels.join(', ');
+  $('#peEnabled').textContent = info.enabled ? (isStructured ? '✓ Gemma 已启用 · 结构化语义输出' : '✓ Gemma 已启用') : '⚠ Gemma 未启用（config.gemma.enabled=false）';
+  if (isStructured && info.file_exists) {
+    $('#peEditableHint').textContent = '⚠ 结构化模式生效中。若存在 gemma_prompt.txt 旧文件会覆盖，请删除：' + (info.file_path || '');
+  }
+  // editable 关闭时禁用保存/重置
+  const can = !!info.editable && !isStructured;
+  $('#peSave').disabled = !can;
+  $('#peReset').disabled = !can;
+  $('#peEditableHint').textContent = isStructured
+    ? '结构化语义输出已开启（config.gemma.structured_output=true），提示词由 object_types/issue_types 等字段自动生成'
+    : (can ? '可编辑（editable_prompt=true）' : '⚠ 只读：在 config 把 gemma.editable_prompt 设为 true 才能保存');
+  $('#pePreviewArea').innerHTML = '';
+  $('#peModal').classList.add('open');
+}
+
+function closePromptEditor() { $('#peModal').classList.remove('open'); }
+
+async function savePrompt() {
+  const txt = $('#peTemplate').value;
+  try {
+    const r = await apiPost('/api/gemma/prompt', { template: txt });
+    if (!r.ok) { toast('保存失败: ' + (r.error || ''), 'err'); return; }
+    toast(r.reset ? '已重置为默认' : '已保存（生效于当前 run）', 'ok');
+  } catch (e) { toast('保存失败: ' + e, 'err'); }
+}
+
+async function resetPrompt() {
+  if (!confirm('清空当前 run 的覆盖文件，回退到 config/内置默认？')) return;
+  try {
+    const r = await apiPost('/api/gemma/prompt', { template: '' });
+    if (!r.ok) { toast('重置失败: ' + (r.error || ''), 'err'); return; }
+    toast('已重置', 'ok');
+    // 重新拉取
+    const info = await apiGet('/api/gemma/prompt');
+    $('#peTemplate').value = info.template || '';
+    $('#peSource').textContent = '当前来源：' + info.source;
+  } catch (e) { toast('重置失败: ' + e, 'err'); }
+}
+
+async function previewPrompt() {
+  if (!CUR) { toast('请先打开一个 target 再预览', 'info'); return; }
+  // 先把当前编辑器里的内容存一下,这样预览看到的就是修改后的(若 editable)
+  if (PROMPT_CACHE && PROMPT_CACHE.editable) {
+    try { await apiPost('/api/gemma/prompt', { template: $('#peTemplate').value }); }
+    catch (e) {}
+  }
+  const area = $('#pePreviewArea');
+  clear(area); area.appendChild(el('div', { class: 'muted', text: '渲染中...' }));
+  let p;
+  try { p = await apiGet('/api/gemma/preview?target_id=' + encodeURIComponent(CUR.target_id)); }
+  catch (e) { clear(area); area.appendChild(el('div', { class: 'muted', text: '预览失败：' + e })); return; }
+  if (!p.ok) { clear(area); area.appendChild(el('div', { class: 'muted', text: '预览失败：' + (p.error || '') })); return; }
+  clear(area);
+  // 1) 视图图片
+  const imgRow = el('div', { class: 'pe-views' },
+    p.views.map(v => el('div', { class: 'pe-view' }, [
+      el('div', { class: 'pe-view-label', text: v.name }),
+      el('img', { src: v.url, onclick: () => openLightbox([{ src: v.url, label: v.name }], 0) }),
+    ])));
+  area.appendChild(imgRow);
+  // 2) 渲染后的 prompt（占位符已替换）
+  const pre = el('pre', { class: 'pe-rendered' });
+  pre.textContent = p.prompt;
+  area.appendChild(el('div', { class: 'pe-rendered-title', text: '实际发给模型的提示词（占位符已替换）：' }));
+  area.appendChild(pre);
+}
+
+function _ensurePromptModal() {
+  if ($('#peModal')) return;
+  const modal = el('div', { id: 'peModal', class: 'pe-modal' }, [
+    el('div', { class: 'pe-dialog' }, [
+      el('div', { class: 'pe-head' }, [
+        el('h2', { text: 'Gemma 提示词编辑器', style: 'margin:0' }),
+        el('button', { class: 'pe-close', onclick: closePromptEditor, text: '×' }),
+      ]),
+      el('div', { class: 'pe-meta' }, [
+        el('div', { id: 'peEnabled', class: 'small' }),
+        el('div', { id: 'peSource', class: 'small muted' }),
+        el('div', { id: 'peConcept', class: 'small muted' }),
+        el('div', { id: 'peLabels', class: 'small muted' }),
+        el('div', { id: 'peEditableHint', class: 'small muted' }),
+      ]),
+      el('div', { class: 'pe-body' }, [
+        el('div', { class: 'pe-edit' }, [
+          el('div', { class: 'pe-edit-title', text: '提示词模板（支持 {concept} {labels} {labels_desc} 占位符）' }),
+          el('textarea', { id: 'peTemplate', class: 'pe-textarea',
+                           spellcheck: 'false', placeholder: '留空 = 用代码内置默认...' }),
+          el('div', { class: 'btnrow pe-actions' }, [
+            el('button', { id: 'peSave', class: 'btn primary', onclick: savePrompt, text: '保存到当前 run' }),
+            el('button', { id: 'peReset', class: 'btn', onclick: resetPrompt, text: '重置为默认' }),
+            el('button', { class: 'btn', onclick: previewPrompt, text: '在当前 target 上预览' }),
+          ]),
+        ]),
+        el('div', { class: 'pe-preview', id: 'pePreviewArea' }),
+      ]),
+    ]),
+  ]);
+  document.body.appendChild(modal);
+  modal.addEventListener('mousedown', (e) => { if (e.target === modal) closePromptEditor(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.classList.contains('open')) closePromptEditor();
+  });
+}
+
+function render(d) {
+  const t = d.target;
+  const root = $('#root'); clear(root);
+
+  // 顶部信息条
+  const head = el('div', { class: 'card s12 review-toolbar' }, [
+    el('div', { style: 'display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap' }, [
+      el('div', {}, [
+        el('h2', { style: 'text-transform:none;font-size:15px;color:var(--text);margin:0 0 8px', text: `${t.image} / 目标 #${t.target_index}` }),
+        el('span', { class: 'pill' + (LABEL_CLASS[t.label] ? ' ' : ''), text: `状态：${t.label || 'unlabeled'}` }),
+        ' ',
+        el('span', { class: 'pill', text: `${IDX + 1} / ${d.total}` }),
+        ' ',
+        el('span', { class: 'pill', text: `类别：${t.class_name ?? '—'}` }),
+        ' ',
+        el('span', { class: 'pill', text: `置信度：${t.confidence ?? '—'}` }),
+        (t.source_prompts && t.source_prompts.length ? t.source_prompts.map(p => el('span', { class: 'pill small', text: p })) : []),
+        (t.prompt_hits !== undefined && t.prompt_hits !== null ? [el('span', { class: 'pill small', text: `hits:${t.prompt_hits}` })] : []),
+        (t.semantic ? [el('span', { class: 'pill small', text: `${t.semantic.object_type || '—'} / ${t.semantic.issue_type || '—'} / conf:${t.semantic.confidence ?? '—'}` })] : []),
+      ]),
+      el('div', { class: 'btnrow', style: 'align-items:center' }, [
+        el('span', { id: 'bakeStat', class: 'pill', text: '缓存：—' }),
+        el('button', { id: 'bakeBtn', class: 'btn', onclick: toggleBake, text: '后台烤缓存' }),
+        el('button', { class: 'btn', onclick: gotoRandom, title: '随机跳到一个未筛选的目标', text: '🎲 随机未筛选' }),
+        el('button', { onclick: () => gotoIdx(IDX - 1), text: '← 上一项' }),
+        el('button', { onclick: () => gotoIdx(IDX + 1), text: '下一项 →' }),
+      ]),
+    ]),
+  ]);
+
+  // 图像区：前端实时合成。原图打底 + 掩膜彩色层(半透明img) + canvas画框/轮廓。
+  // 各图层独立开关，切换瞬间完成，无后端合成、无组合缓存。
+  const origSrc = '/media/image/' + encodeURIComponent(t.image);
+  const layerSrc = '/cache/layer/' + encodeURIComponent(t.overlay_file);
+
+  const stage = el('div', { class: 'compose', id: 'compose', title: '点击放大' });
+  const baseImg = el('img', { class: 'layer-base', src: origSrc });
+  const maskImg = el('img', { class: 'layer-mask', src: layerSrc,
+                              style: 'display:' + (SHOW.mask ? 'block' : 'none') });
+  const boxCanvas = el('canvas', { class: 'layer-canvas', id: 'boxCanvas' });
+  stage.appendChild(baseImg);
+  stage.appendChild(maskImg);
+  stage.appendChild(boxCanvas);
+  stage.addEventListener('click', () => openComposeLightbox(t));
+
+  // 原图载入后按其尺寸画框/轮廓
+  baseImg.addEventListener('load', () => drawBoxes(boxCanvas, baseImg));
+
+  const imgs = el('div', { class: 'card s9 review-canvas-card' }, [
+    el('div', { class: 'imgbox' }, [
+      el('div', { class: 'title' }, [el('span', { text: '原图 + 叠加层' }), el('span', { text: t.image })]),
+      stage,
+    ]),
+  ]);
+
+  // 右侧操作面板
+  const modeSelect = el('select', { onchange: (e) => changeMode(e.target.value) },
+    ['all', 'unreviewed', ...LABELS].map(m =>
+      el('option', { value: m, ...(m === MODE ? { selected: 'selected' } : {}) }, [MODE_NAMES[m] || `${LABEL_NAMES[m] || m} (${m})`])));
+
+  // Semantic 动态筛选（仅当数据有 semantic 字段时显示）
+  let semFilters = null;
+  if (d.target && (d.target.semantic || d.target.source_prompts)) {
+    semFilters = el('div', { id: 'semFilters', style: 'margin-top:8px;padding-top:8px;border-top:1px solid var(--line)' }, [
+      el('label', { text: '语义筛选', style: 'font-weight:600;margin-bottom:4px' }),
+      el('div', { style: 'display:flex;flex-wrap:wrap;gap:6px;margin:4px 0' }, [
+        el('select', { id: 'sfObjType', onchange: () => applySemFilter(), style: 'flex:1;min-width:80px' },
+          [el('option', { value: '' }, ['all object'])].concat(
+            (d.available_sem_object_types || []).map(v => el('option', { value: v }, [v]))
+          )),
+        el('select', { id: 'sfIssueType', onchange: () => applySemFilter(), style: 'flex:1;min-width:80px' },
+          [el('option', { value: '' }, ['all issue'])].concat(
+            (d.available_sem_issue_types || []).map(v => el('option', { value: v }, [v]))
+          )),
+        el('select', { id: 'sfVerifiable', onchange: () => applySemFilter(), style: 'flex:1;min-width:80px' },
+          [el('option', { value: '' }, ['any verifiable']),
+           el('option', { value: 'true' }, ['verifiable=true']),
+           el('option', { value: 'false' }, ['verifiable=false'])]),
+      ]),
+      el('div', { style: 'display:flex;align-items:center;gap:6px;margin-top:4px' }, [
+        el('label', { text: 'min prompt_hits', style: 'white-space:nowrap' }),
+        el('input', { id: 'sfMinHits', type: 'number', min: 0, max: 99, value: '2',
+                      style: 'width:60px', onchange: () => applySemFilter() }),
+        el('label', { text: 'min confidence', style: 'white-space:nowrap;margin-left:8px' }),
+        el('input', { id: 'sfMinConf', type: 'number', min: 0, max: 1, step: 0.05, value: '0.3',
+                      style: 'width:70px', onchange: () => applySemFilter() }),
+      ]),
+    ]);
+  }
+
+  // prompt(run) 选择器
+  const promptSelect = el('select', { id: 'promptSelect', onchange: (e) => changePrompt(e.target.value) },
+    (RUNS.length ? RUNS : [{ prompt: CUR_PROMPT, slug: '' }]).map(r =>
+      el('option', { value: r.prompt, ...(r.prompt === CUR_PROMPT ? { selected: 'selected' } : {}) },
+        [r.prompt + (r.has_index === false ? '（无索引）' : '')])));
+
+  // 框层开关
+  const layerToggle = (key, label) => el('label', { style: 'display:inline-flex;align-items:center;margin:0 10px 4px 0' }, [
+    el('input', {
+      type: 'checkbox', class: 'inline', style: 'width:auto;margin-right:5px',
+      ...(SHOW[key] ? { checked: 'checked' } : {}),
+      onchange: (e) => { SHOW[key] = e.target.checked; applyLayers(); },
+    }), label,
+  ]);
+
+  const labelBtns = el('div', { class: 'btnrow', id: 'labelBtns', style: 'margin-top:6px' },
+    LABELS.map((lab, n) => el('button', {
+      class: (LABEL_CLASS[lab] || '') + (lab === t.label ? ' active' : ''),
+      'data-label': lab,
+      onclick: () => labelCur(lab),
+    }, [`${n + 1}. ${LABEL_NAMES[lab] || lab}`])));
+
+  const panel = el('aside', { class: 'card s3 review-inspector' }, [
+    el('h2', { text: 'AI 审核' }),
+    el('label', { text: '当前 Prompt（只筛这个）' }), promptSelect,
+    el('label', { text: '筛选模式' }), modeSelect,
+    semFilters,
+    el('label', { text: '显示图层' }),
+    el('div', { style: 'margin:2px 0 8px' }, [
+      layerToggle('mask', '掩膜'), layerToggle('aabb', '正框'),
+      layerToggle('obb', '旋转框'), layerToggle('contour', '轮廓'),
+    ]),
+    el('label', { text: '备注' }), el('input', { id: 'note', value: t.note || '' }),
+    el('label', { style: 'margin-top:12px' }, [
+      el('input', { id: 'autoNext', type: 'checkbox', checked: 'checked', class: 'inline', style: 'width:auto;margin-right:6px' }),
+      '打标后自动下一项',
+    ]),
+    el('label', {}, [
+      el('input', {
+        id: 'randomMode', type: 'checkbox', class: 'inline',
+        style: 'width:auto;margin-right:6px',
+        ...(RANDOM_MODE ? { checked: 'checked' } : {}),
+        onchange: (e) => { RANDOM_MODE = e.target.checked; },
+      }),
+      '随机模式（打标后随机跳未筛选）',
+    ]),
+    el('label', { style: 'margin-top:8px' }, [
+      el('input', {
+        id: 'autoGemma', type: 'checkbox', class: 'inline',
+        style: 'width:auto;margin-right:6px',
+        ...(AUTO_GEMMA ? { checked: 'checked' } : {}),
+        onchange: (e) => { AUTO_GEMMA = e.target.checked; if (AUTO_GEMMA) askGemma(); },
+      }),
+      '每张自动让 Gemma 建议（需在 config 开启 gemma.enabled）',
+    ]),
+    el('div', { class: 'btnrow', style: 'margin-top:4px' }, [
+      el('button', { class: 'btn', onclick: askGemma, text: '问 Gemma 建议（G）' }),
+      el('button', { class: 'btn', onclick: openPromptEditor, text: '编辑提示词' }),
+      el('button', { class: 'btn', onclick: undoLastLabel, text: '撤销标注 (Z)' }),
+      el('span', { id: 'gemmaStat', class: 'pill', text: '' }),
+    ]),
+    // 后端自动跑：开关、状态、进度
+    el('div', { class: 'btnrow', style: 'margin-top:6px;padding-top:6px;border-top:1px solid var(--line)' }, [
+      el('button', { id: 'gAutoBtn', class: 'btn', onclick: toggleGemmaAuto, text: '🤖 Gemma 自动跑（后端）' }),
+      el('button', { id: 'gResetBtn', class: 'btn', onclick: resetGemmaLabels, text: '🗑 重置Gemma标注', style: 'color:var(--red)' }),
+      el('span', { id: 'gAutoStat', class: 'pill', text: '' }),
+    ]),
+    el('div', { id: 'gAutoProgWrap', class: 'small muted', style: 'margin-top:4px;display:none' }, [
+      el('div', { id: 'gAutoProg' }),
+      el('div', { class: 'progress', style: 'margin-top:3px' }, [
+        el('div', { id: 'gAutoBar', class: 'bar' }),
+      ]),
+    ]),
+    labelBtns,
+    el('div', { class: 'small muted', style: 'margin-top:10px' }, [
+      '快捷键：', el('span', { class: 'kbd', text: '1-' + LABELS.length }), ' 打标　',
+      el('span', { class: 'kbd', text: '← →' }), ' 翻页　',
+      el('span', { class: 'kbd', text: 'R' }), ' 随机　',
+      el('span', { class: 'kbd', text: 'G' }), ' 问 Gemma',
+    ]),
+    el('h3', { text: '本图所有 target' }),
+    el('div', { class: 'targets' }, d.image_targets.map(x => {
+      const cur = x.target_id === t.target_id;
+      const link = (x.jump !== null && x.jump !== undefined)
+        ? el('a', { href: '#', onclick: (e) => { e.preventDefault(); gotoIdx(x.jump); } }, [`#${x.target_index}`])
+        : el('span', { text: `#${x.target_index}` });
+      return el('div', { class: 'target' + (cur ? ' cur' : '') }, [
+        link, ' ',
+        el('span', { class: 'pill ' + (LABEL_CLASS[x.label] || ''), text: x.label || 'unlabeled' }),
+        (x.source_prompts && x.source_prompts.length ? x.source_prompts.map(p => el('span', { class: 'pill', text: p })) : []),
+        el('div', { class: 'muted', text: `conf=${x.confidence ?? '—'}  ${x.class_name ?? ''}${x.prompt_hits !== undefined && x.prompt_hits !== null ? '  hits:'+x.prompt_hits : ''}` }),
+      ]);
+    })),
+  ]);
+
+  const g = el('div', { class: 'grid review-workspace' }, [head, imgs, panel]);
+  root.appendChild(g);
+}
+
+// 键盘快捷键
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+  if (e.key === 'ArrowLeft') { gotoIdx(IDX - 1); }
+  else if (e.key === 'ArrowRight') { gotoIdx(IDX + 1); }
+  else if (e.key === 'r' || e.key === 'R') { gotoRandom(); }
+  else if (e.key === 'g' || e.key === 'G') { askGemma(); }
+  else if (e.key === 'z' || e.key === 'Z') { undoLastLabel(); }
+  else if (/^[1-9]$/.test(e.key)) {
+    const n = parseInt(e.key, 10) - 1;
+    if (n < LABELS.length) labelCur(LABELS[n]);
+  }
+});
+
+// ---- 后台烤缓存 ----
+let BAKE_RUNNING = false;
+async function toggleBake() {
+  if (BAKE_RUNNING) await apiPost('/api/bake/stop', {});
+  else await apiPost('/api/bake/start', {});
+  pollBake();
+}
+async function pollBake() {
+  let s;
+  try { s = await apiGet('/api/bake/status'); } catch (e) { return; }
+  BAKE_RUNNING = s.running;
+  const stat = $('#bakeStat'), btn = $('#bakeBtn');
+  if (stat) {
+    if (s.total > 0) {
+      const pct = Math.floor(s.done * 100 / s.total);
+      stat.textContent = `缓存：${s.done}/${s.total} (${pct}%)` + (s.failed ? ` 失败${s.failed}` : '');
+    } else {
+      stat.textContent = s.running ? '缓存：准备中' : '缓存：未启动';
+    }
+  }
+  if (btn) btn.textContent = s.running ? '暂停烤缓存' : '后台烤缓存';
+}
+
+// ===================== Gemma 自动模式(后端) =====================
+async function toggleGemmaAuto() {
+  let s; try { s = await apiGet('/api/gemma/auto/status'); } catch (e) { s = {}; }
+  if (s.running) {
+    try { await apiPost('/api/gemma/auto/stop', {}); toast('已请求停止(当前一条跑完即停)', 'info'); }
+    catch (e) { toast('停止失败: ' + e, 'err'); }
+  } else {
+    try {
+      const r = await apiPost('/api/gemma/auto/start', {});
+      if (!r.ok) { toast('启动失败: ' + (r.error || ''), 'err'); return; }
+      toast(r.already ? '已在运行' : '已启动(已打标的会自动跳过,可随时停止)', 'ok');
+    } catch (e) { toast('启动失败: ' + e, 'err'); }
+  }
+  setTimeout(pollGemmaAuto, 400);
+}
+
+async function pollGemmaAuto() {
+  let s;
+  try { s = await apiGet('/api/gemma/auto/status'); } catch (e) { return; }
+  const btn = document.getElementById('gAutoBtn');
+  const stat = document.getElementById('gAutoStat');
+  const wrap = document.getElementById('gAutoProgWrap');
+  const prog = document.getElementById('gAutoProg');
+  const bar = document.getElementById('gAutoBar');
+  if (!btn) return;
+  if (s.running) {
+    btn.textContent = '⏸ 停止 Gemma 自动跑';
+    btn.classList.add('warn');
+  } else {
+    btn.textContent = '🤖 Gemma 自动跑（后端）';
+    btn.classList.remove('warn');
+  }
+  const done = s.done || 0, total = s.total || 0;
+  if (s.running || done > 0 || total > 0) {
+    wrap.style.display = '';
+    const pct = total ? Math.floor(done * 100 / total) : 0;
+    prog.textContent = `已自动打标 ${done} / ${total}  跳过 ${s.skipped || 0}  失败 ${s.failed || 0}` +
+                       (s.last_label ? '  · 上次: ' + s.last_label : '');
+    bar.style.width = pct + '%';
+  }
+  if (stat) {
+    stat.textContent = s.running ? '运行中' : (s.last_error ? '上次错误: ' + s.last_error.substring(0, 60) : '');
+  }
+}
+
+async function resetGemmaLabels() {
+  if (!confirm('确定清除所有 Gemma 自动标注？人工标注不会被删除。')) return;
+  try {
+    const r = await apiPost('/api/gemma/reset', {});
+    if (!r.ok) { toast('重置失败: ' + (r.error || ''), 'err'); return; }
+    toast(`已清除 ${r.removed} 条 Gemma 标注，保留 ${r.kept} 条人工标注`, 'ok');
+    IDX = 0; MODE = 'all';
+    load();
+  } catch (e) { toast('重置失败: ' + e, 'err'); }
+}
+
+loadRuns().then(() => { applySemFilter(); });
+setInterval(pollBake, 2000);   // 持续刷新烤缓存进度
+setInterval(pollGemmaAuto, 2000);  // Gemma 自动模式状态
+pollGemmaAuto();
+
+// 窗口尺寸变化时重画框（canvas 尺寸随显示尺寸）
+let _rzTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(_rzTimer);
+  _rzTimer = setTimeout(() => {
+    const c = document.getElementById('boxCanvas');
+    const b = document.querySelector('.layer-base');
+    if (c && b && b.complete) drawBoxes(c, b);
+  }, 150);
+});
+</script>
+</body>
+</html>

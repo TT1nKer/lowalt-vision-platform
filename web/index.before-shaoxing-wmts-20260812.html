@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>工作台 · 低空遥感视觉AI自动化标注训练系统</title><link rel="stylesheet" href="/static/app.css?v=20260717e"></head>
+<body>
+<div class="modern-app">
+  <aside class="modern-sidebar">
+    <div class="modern-logo"><span class="modern-logo-mark">◈</span><span>低空遥感视觉ai<small>自动化标注训练系统</small></span></div>
+    <div class="modern-nav-label">工作空间</div>
+    <nav class="modern-nav" aria-label="主导航">
+      <a class="active" href="/"><svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5v8.2a1.3 1.3 0 0 1-1.3 1.3H4.3A1.3 1.3 0 0 1 3 19.7z"/><path d="M9 21v-6h6v6"/></svg><span>工作台</span></a>
+      <a href="/review"><svg viewBox="0 0 24 24"><path d="M4 4h16v13H8l-4 4z"/><path d="m8 10 2.3 2.3L16 7"/></svg><span>AI 审核</span></a>
+      <a href="/report"><svg viewBox="0 0 24 24"><path d="M5 3h14v18H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg><span>成果报告</span></a>
+      <a href="/test"><svg viewBox="0 0 24 24"><path d="M4 19 9 14l3 3 7-9"/><path d="M4 5v14h16"/></svg><span>模型测试</span></a>
+      <a href="/files"><svg viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v11H3z"/></svg><span>文件与数据</span></a>
+    </nav>
+    <div class="modern-nav-sep"></div>
+    <div class="modern-project"><div class="modern-project-label">当前项目</div><div class="modern-project-name" id="projectName">正在加载…</div><div class="modern-project-state"><i></i>项目服务正常</div></div>
+  </aside>
+
+  <div class="modern-main">
+    <header class="modern-topbar"><div class="modern-crumb"><strong>低空遥感视觉AI自动化标注训练系统</strong> / 项目空间</div><div class="modern-user"><span id="healthText">正在检查服务状态</span><span class="modern-avatar">SX</span></div></header>
+    <main class="modern-content">
+      <section class="modern-page-head"><div><h1>工作台</h1><p id="pageSummary">正在加载当前项目的数据状态…</p></div><div class="modern-actions"><a class="modern-btn" href="/report">查看项目报告</a><button class="modern-btn primary" onclick="startJob('p1_all')">运行智能识别</button></div></section>
+
+      <section class="modern-kpis" aria-label="项目指标">
+        <article class="modern-card modern-kpi"><div class="modern-kpi-head"><span>检出目标</span><span class="modern-kpi-icon">⌘</span></div><div class="modern-kpi-value" id="targetCount">—</div><div class="modern-kpi-foot">当前识别索引中的目标</div></article>
+        <article class="modern-card modern-kpi"><div class="modern-kpi-head"><span>审核完成</span><span class="modern-kpi-icon">✓</span></div><div class="modern-kpi-value" id="reviewedCount">—</div><div class="modern-kpi-foot" id="reviewNote">等待建立审核索引</div></article>
+        <article class="modern-card modern-kpi"><div class="modern-kpi-head"><span>确认正样本</span><span class="modern-kpi-icon">◆</span></div><div class="modern-kpi-value" id="positiveCount">—</div><div class="modern-kpi-foot good">可用于训练集导出</div></article>
+        <article class="modern-card modern-kpi"><div class="modern-kpi-head"><span>训练数据集</span><span class="modern-kpi-icon">↗</span></div><div class="modern-kpi-value" id="datasetState">—</div><div class="modern-kpi-foot" id="datasetNote">正在检查数据集状态</div></article>
+      </section>
+
+      <section class="modern-grid">
+        <article class="modern-card"><div class="modern-card-head"><div><h2 class="modern-card-title">数据工作流</h2><p class="modern-card-sub">按步骤完成识别、审核和训练数据准备。</p></div><span class="modern-link" id="runLabel">任务空间：—</span></div><div class="modern-flow">
+          <div class="modern-flow-step"><div class="modern-step-index"><span>STEP 01</span><b>1</b></div><h3>智能识别</h3><p>检测目标、换算坐标并汇总识别结果。</p><button class="modern-btn primary" onclick="startJob('p1_all')">运行识别</button></div>
+          <div class="modern-flow-step"><div class="modern-step-index"><span>STEP 02</span><b>2</b></div><h3>审核筛选</h3><p>确认有效样本，处理困难目标与误检。</p><a class="modern-btn primary" href="/review">进入审核</a></div>
+          <div class="modern-flow-step"><div class="modern-step-index"><span>STEP 03</span><b>3</b></div><h3>导出训练集</h3><p>将审核结果导出为 YOLO-OBB 数据集。</p><button class="modern-btn primary" onclick="startJob('p3_export',{fmt:'obb'})">导出 OBB</button></div>
+        </div></article>
+        <aside class="modern-card"><div class="modern-card-head"><div><h2 class="modern-card-title">项目状态</h2><p class="modern-card-sub">运行环境与数据就绪度</p></div></div><div class="modern-status"><div class="modern-status-row"><span class="modern-status-left"><i class="modern-status-dot" id="samDot"></i>SAM3 服务</span><strong id="samState">检测中</strong></div><div class="modern-status-row"><span class="modern-status-left"><i class="modern-status-dot" id="gemmaDot"></i>Gemma 审核</span><strong id="gemmaState">检测中</strong></div><div class="modern-status-row"><span class="modern-status-left"><i class="modern-status-dot" id="indexDot"></i>目标索引</span><strong id="indexState">检查中</strong></div><div class="modern-status-row"><span class="modern-status-left"><i class="modern-status-dot" id="exportDot"></i>数据集导出</span><strong id="exportState">检查中</strong></div></div></aside>
+      </section>
+
+      <section class="modern-lower">
+        <article class="modern-card modern-review"><div class="modern-card-head" style="padding:0"><div><h2 class="modern-card-title">审核覆盖度</h2><p class="modern-card-sub">当前任务空间的审核进展</p></div><a class="modern-link" href="/review">继续审核</a></div><div class="modern-review-metrics"><b id="reviewPercent">0%</b><span id="reviewRatio">0 / 0 个目标已审核</span></div><div class="modern-progress"><i id="reviewBar" style="width:0%"></i></div><div class="modern-legend"><span>未审核</span><span id="reviewedDetail">0 条已审核</span></div></article>
+        <article class="modern-card modern-dist"><div class="modern-card-head" style="padding:0"><div><h2 class="modern-card-title">标签分布</h2><p class="modern-card-sub">审核结果按标签统计</p></div><a class="modern-link" href="/report">报告</a></div><div class="modern-dist-list" id="labelDistribution"><span class="modern-card-sub">尚无审核标签</span></div></article>
+      </section>
+
+      <section class="modern-lower" style="margin-top:20px"><article class="modern-card modern-job"><div class="modern-job-top"><div><h2 class="modern-card-title">任务运行中心</h2><p class="modern-card-sub" id="jobtext">暂无进行中的任务</p></div><div class="modern-actions"><button class="modern-btn" onclick="cancelActiveJob()">取消任务</button><span class="modern-badge" id="jobState">待命</span></div></div><div class="modern-progress"><i id="jobbar" style="width:0%"></i></div><div class="modern-log" id="joblog"></div></article><aside class="modern-card modern-dist"><div class="modern-card-head" style="padding:0"><div><h2 class="modern-card-title">常用操作</h2><p class="modern-card-sub">低频操作收纳在此</p></div></div><div class="modern-extra-actions"><button class="modern-btn" onclick="startJob('p2_index')">重建目标索引</button><button class="modern-btn" onclick="startGemmaAuto()">启动自动审核</button><button class="modern-btn" onclick="startTrain()">开始训练</button><button class="modern-btn" onclick="resumeTrain()">继续训练</button><button class="modern-btn" onclick="startJob('pipeline_full',{fmt:'obb'})">运行全链路</button></div></aside></section>
+
+      <section class="modern-card modern-advanced"><details><summary>训练参数与高级操作</summary><div class="modern-advanced-body"><div class="modern-settings"><label>训练模型<input id="train_model" value="yolo26n-obb.pt"></label><label>图像尺寸<input id="train_imgsz" value="1024"></label><label>训练轮数<input id="train_epochs" value="100"></label></div><div class="modern-extra-actions"><button class="modern-btn" onclick="startJob('p1_infer')">仅运行识别</button><button class="modern-btn" onclick="startJob('p1_coords')">计算坐标</button><button class="modern-btn" onclick="startJob('p1_aggregate')">汇总结果</button><button class="modern-btn" onclick="startJob('p3_export',{fmt:'seg'})">导出 YOLO-seg</button><button class="modern-btn" onclick="stopGemmaAuto()">停止自动审核</button></div></div></details></section>
+    </main>
+  </div>
+</div>
+<script src="/static/app.js?v=20260717e"></script>
+<script>
+function n(v){return Number(v||0).toLocaleString('zh-CN')}
+function promptName(v){const parts=String(v||'默认任务').split(',').map(x=>x.trim()).filter(Boolean);return parts.slice(0,2).join(' · ')||'默认任务'}
+function setDot(id,ok,enabled){const d=$(id);d.className='modern-status-dot '+(ok?'ok':enabled?'warn':'');}
+function renderLabels(counts){const root=$('#labelDistribution');clear(root);const list=Object.entries(counts||{}).sort((a,b)=>b[1]-a[1]);if(!list.length){root.appendChild(el('span',{class:'modern-card-sub',text:'尚无审核标签'}));return}const max=Math.max(...list.map(x=>x[1]),1);list.slice(0,5).forEach(([key,val])=>root.appendChild(el('div',{class:'modern-dist-row'},[el('span',{class:'modern-dist-name',text:key}),el('span',{class:'modern-dist-track'},[el('i',{class:'modern-dist-fill',style:`width:${Math.max(5,val*100/max)}%`})]),el('span',{class:'modern-dist-num',text:n(val)})])))}
+async function loadOverview(){try{const d=await apiGet('/api/overview'),c=d.label_counts||{},total=Number(d.total_index||d.target_count||0),reviewed=Number(d.reviewed_count||0),positive=(c.accept||0)+(c.hard_positive||0),pct=total?Math.round(reviewed*100/total):0,prompt=promptName(d.text_prompt);$('#projectName').textContent=(d.project_dir||'当前项目').split(/[\\/]/).filter(Boolean).pop()||'当前项目';$('#targetCount').textContent=n(d.target_count);$('#reviewedCount').textContent=n(reviewed);$('#positiveCount').textContent=n(positive);$('#datasetState').textContent=d.yolo_ready?'就绪':'未导出';$('#datasetNote').textContent=d.yolo_ready?'YOLO 数据集已生成':'审核完成后可导出';$('#reviewNote').textContent=total?`当前覆盖率 ${pct}%`:'等待建立目标索引';$('#pageSummary').textContent=`当前任务：${prompt} · 已识别 ${n(total)} 个目标，审核完成 ${pct}%。`;$('#runLabel').textContent='任务：'+prompt;$('#reviewPercent').textContent=pct+'%';$('#reviewRatio').textContent=`${n(reviewed)} / ${n(total)} 个目标已审核`;$('#reviewedDetail').textContent=n(reviewed)+' 条已审核';$('#reviewBar').style.width=pct+'%';$('#indexState').textContent=d.index_exists?n(total)+' 个目标':'尚未建立';$('#exportState').textContent=d.yolo_ready?'已就绪':'等待导出';setDot('#indexDot',d.index_exists,true);setDot('#exportDot',d.yolo_ready,true);renderLabels(c);if(d.train_defaults){$('#train_model').value=d.train_defaults.model||$('#train_model').value;$('#train_imgsz').value=d.train_defaults.imgsz||$('#train_imgsz').value;$('#train_epochs').value=d.train_defaults.epochs||$('#train_epochs').value}}catch(e){$('#pageSummary').textContent='暂时无法读取项目数据，请检查服务状态。'}}
+async function loadHealth(){try{const h=await apiGet('/api/health');setDot('#samDot',h.sam,true);setDot('#gemmaDot',h.gemma,h.gemma_enabled);$('#samState').textContent=h.sam?'已连接':'当前不可用';$('#gemmaState').textContent=!h.gemma_enabled?'未启用':h.gemma?'已连接':'当前不可用';$('#healthText').textContent='控制台运行正常'}catch(e){$('#healthText').textContent='控制台运行正常'}}
+function startTrain(){startJob('p3_train',{model:$('#train_model').value,imgsz:$('#train_imgsz').value,epochs:$('#train_epochs').value})}function resumeTrain(){startJob('p3_train',{resume:true})}async function startGemmaAuto(){try{const d=await apiPost('/api/gemma/auto/start',{});toast(d.ok===false?(d.error||'启动失败'):'Gemma 自动审核已启动',d.ok===false?'err':'ok')}catch(e){toast('启动失败：'+e,'err')}}async function stopGemmaAuto(){try{await apiPost('/api/gemma/auto/stop',{});toast('已请求停止自动审核','info')}catch(e){toast('停止失败：'+e,'err')}}function onJobDone(){loadOverview()}const oldBar=_setBar;_setBar=function(p,s){oldBar(p,s);const labels={pending:'等待中',running:'运行中',done:'已完成',error:'执行失败',cancelled:'已取消'};$('#jobState').textContent=labels[s]||'待命'};loadOverview();loadHealth();resumeLatestJob();setInterval(loadOverview,5000);setInterval(loadHealth,15000);
+</script>
+</body></html>

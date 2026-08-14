@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>低空遥感智能分析平台</title>
+  <link rel="stylesheet" href="/static/vendor/leaflet.css">
+  <link rel="stylesheet" href="/static/platform.css">
+</head>
+<body data-page="map">
+<a class="skip-link" href="#map">跳到地图</a>
+<header class="topbar">
+  <div class="brand"><span class="brand-mark" aria-hidden="true">SX</span><span><strong>低空遥感智能分析平台</strong><small>无人机与正射影像智能分析</small></span></div>
+  <div class="top-actions"><span class="source-state"><i></i><span id="sourceLabel">正在连接数据</span></span><button class="button ghost" id="analysisButton">新建分析任务</button><a class="button" href="/engineering">技术工作台</a></div>
+</header>
+<main class="workspace">
+  <aside class="capability-panel" aria-label="分析能力">
+    <div class="panel-heading"><span>分析能力</span><small>当前项目能力目录</small></div>
+    <nav id="capabilityList" class="capability-list"></nav>
+    <div class="evidence-filter">
+      <h2>停车候选证据</h2>
+      <label><input type="checkbox" value="vehicle_row_supported" checked><i class="level high"></i>车排支持 <strong id="countHigh">—</strong></label>
+      <label><input type="checkbox" value="vehicle_detected"><i class="level medium"></i>检测到车辆 <strong id="countMedium">—</strong></label>
+      <label><input type="checkbox" value="segformer_only"><i class="level low"></i>仅模型候选 <strong id="countLow">—</strong></label>
+      <p>颜色表示证据等级，不代表人工真值。</p>
+    </div>
+    <div class="evidence-filter">
+      <h2>DJI 导入资产</h2>
+      <label><input type="checkbox" id="importLayerToggle" checked><i class="level drone"></i>图片与抽帧点位 <strong id="importAssetCount">—</strong></label>
+      <p>点位来自导入素材的 EXIF/SRT 定位，模型分析结果仍为候选。</p>
+    </div>
+    <div class="system-note"><span>当前数据</span><strong id="imageryCount">—</strong><small>imagery WMTS 图块</small></div>
+  </aside>
+
+  <section class="map-stage" aria-label="全域影像地图">
+    <div id="map" tabindex="0"></div>
+    <div class="map-title"><span>全域</span><small id="mapStatus">正在载入候选图层</small></div>
+    <div class="map-legend"><span><i class="level high"></i>车排支持</span><span><i class="level medium"></i>车辆证据</span><span><i class="level low"></i>模型候选</span></div>
+  </section>
+
+  <aside class="detail-panel" aria-live="polite">
+    <div id="emptyDetail" class="empty-detail"><span class="radar" aria-hidden="true"></span><h1>选择一个候选区域</h1><p>点击地图中的停车候选，查看原始影像、模型边界和支持证据。</p></div>
+    <div id="candidateDetail" class="candidate-detail" hidden>
+      <div class="detail-head"><div><span class="eyebrow">停车设施候选</span><h1 id="detailTitle"></h1></div><div class="detail-actions"><span id="detailBadge" class="status-badge"></span><button id="closeDetail" class="detail-close" type="button" aria-label="关闭候选详情">×</button></div></div>
+      <div class="image-compare">
+        <figure><figcaption>原始影像</figcaption><button class="media-open" type="button" data-viewer="original" aria-label="放大原始影像"><img id="detailImage" alt="候选区域原始正射影像"><span>点击放大</span></button></figure>
+        <figure class="mask-figure"><figcaption>SegFormer 区域</figcaption><button class="media-open" type="button" data-viewer="mask" aria-label="放大 SegFormer 区域"><img id="detailImageBase" alt=""><img id="detailMask" class="mask-layer" alt="停车区域候选掩膜"><span>点击放大</span></button></figure>
+      </div>
+      <dl class="detail-facts"><div><dt>来源</dt><dd>UIUC SegFormer-large-parking</dd></div><div><dt>真实性</dt><dd>模型候选，非人工真值</dd></div><div><dt>坐标</dt><dd>WMTS / OGC:CRS84</dd></div></dl>
+      <section id="secondaryEvidence" class="secondary-evidence" hidden><h2>SAM3 区域内证据</h2><div id="secondaryEvidenceList"></div></section>
+      <a id="downloadMask" class="button full" download>下载候选 mask</a>
+    </div>
+  </aside>
+</main>
+
+<dialog id="analysisDialog"><form method="dialog"><button class="dialog-close" aria-label="关闭">×</button><span class="eyebrow">统一分析入口</span><h2>创建影像分析任务</h2><p>正射影像已接入；DJI 图片和视频请先到技术工作台完成导入，再回到地图查看带定位的素材点位与停车分析结果。</p><div class="asset-types"><article><b>正射影像</b><span>已接入</span></article><article><b>DJI 图片</b><span>技术工作台导入</span></article><article><b>DJI 视频</b><span>抽帧后分析</span></article></div><a class="button full" href="/engineering">前往技术工作台</a></form></dialog>
+<dialog id="mediaViewer" class="media-viewer">
+  <div class="viewer-shell">
+    <header><strong id="viewerTitle">影像查看</strong><div><button id="viewerZoomOut" type="button" aria-label="缩小">−</button><button id="viewerReset" type="button">100%</button><button id="viewerZoomIn" type="button" aria-label="放大">＋</button><button id="viewerClose" type="button">关闭</button></div></header>
+    <div id="viewerViewport" class="viewer-viewport" tabindex="0" aria-label="可缩放影像，使用滚轮缩放并拖动查看"><div id="viewerCanvas" class="viewer-canvas"><img id="viewerBase" alt="放大的候选影像"><img id="viewerOverlay" class="viewer-overlay" alt="放大的候选掩膜" hidden></div></div>
+    <small>滚轮或按钮缩放；按住并拖动查看细节；双击快速放大。</small>
+  </div>
+</dialog>
+<script src="/static/vendor/leaflet.js"></script>
+<script src="/static/platform.js"></script>
+</body>
+</html>

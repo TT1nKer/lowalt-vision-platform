@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>技术控制台 · 低空遥感智能分析平台</title>
+  <link rel="stylesheet" href="/static/platform.css">
+</head>
+<body data-page="engineering" class="console-page">
+<header class="topbar">
+  <div class="brand"><span class="brand-mark">SX</span><span><strong>技术控制台</strong><small>数据、任务、模型与运行</small></span></div>
+  <div class="top-actions"><a class="button ghost" href="http://127.0.0.1:7860/">旧训练控制台</a><a class="button" href="/">返回地图</a></div>
+</header>
+<main class="console-layout">
+  <nav class="console-nav" aria-label="控制台导航">
+    <strong>控制台</strong>
+    <a class="active" href="#overview">运行概况</a>
+    <a href="#imports">数据导入</a>
+    <a href="#analysis">分析任务</a>
+    <a href="#training">训练任务</a>
+    <a href="#models">模型管理</a>
+  </nav>
+  <section class="console-main">
+    <header class="console-heading" id="overview"><div><h1>运行概况</h1><p>当前权威数据与服务状态</p></div><span class="runtime-state"><i></i>平台运行中 · 7861</span></header>
+    <section class="console-metrics" aria-label="数据统计">
+      <article><span>WMTS 图块</span><strong id="engImagery">—</strong><small>imagery</small></article>
+      <article><span>停车候选</span><strong id="engCandidates">—</strong><small>SegFormer 输出</small></article>
+      <article><span>车排支持</span><strong id="engSupported">—</strong><small>车辆辅助证据</small></article>
+    </section>
+
+    <section class="console-panel" id="imports">
+      <div class="console-panel-head"><div><h2>数据导入</h2><p>选择 DJI 图片、视频目录，抽取视频帧并保留 GPS 与时间元数据</p></div></div>
+      <div class="import-form">
+        <label>源目录<input id="importSource" type="text" placeholder="例如 H:\uav_202608\flight1（支持图片、视频和同名 .SRT）"></label>
+        <label>任务名称<input id="importName" type="text" placeholder="默认使用目录名"></label>
+        <label>视频抽帧间隔<input id="frameStride" type="number" min="1" max="600" value="30"><small>每 N 帧抽 1 帧，默认 30</small></label>
+        <div class="model-actions">
+          <button class="button" id="scanSourceButton" type="button">扫描目录</button>
+          <button class="button primary" id="importStartButton" type="button">开始导入</button>
+        </div>
+        <p class="hint" id="importHint">允许的源目录：项目目录及其子目录、H:\、D:\、E:\、F:\、G:\、C:\Users\sx。</p>
+        <div id="scanResult" class="import-result" hidden></div>
+      </div>
+      <div class="console-table" role="table" id="importRunsTable">
+        <div class="console-row console-row-head" role="row"><span>导入任务</span><span>状态</span><span>素材 / 地理参考</span><span>停车分析</span><span>操作</span></div>
+        <div class="console-row" role="row"><span class="muted">暂无导入任务</span></div>
+      </div>
+    </section>
+
+    <section class="console-panel" id="analysis">
+      <div class="console-panel-head"><div><h2>分析任务</h2><p>已执行任务与真实产物；DJI 素材导入后可在对应任务上运行停车分析</p></div><a class="button" href="#imports">新建导入任务</a></div>
+      <div class="task-row"><span class="task-icon">P</span><div><b>全域停车候选</b><small>SegFormer-large-parking · imagery</small></div><code>quality/parking_direct_first_layers</code><span class="state ready">已完成</span></div>
+      <div class="task-row"><span class="task-icon">S</span><div><b>候选区内证据提取</b><small>车辆、标线、通道、建筑、绿化 · SAM3</small></div><code>quality/parking_secondary_sam3</code><span id="secondaryProgress" class="state pending">读取中</span></div>
+    </section>
+
+    <section class="console-panel" id="training">
+      <div class="console-panel-head"><div><h2>训练任务</h2><p>训练仍由旧控制台执行，新平台尚未绑定任务后端</p></div><a class="button" href="http://127.0.0.1:7860/">打开旧训练控制台</a></div>
+      <div class="model-actions">
+        <article><b>Transformer / SegFormer</b><span>停车区域分割与后续微调</span><button disabled>尚未接入</button></article>
+        <article><b>YOLO</b><span>车辆、人员和具体施工设备</span><button disabled>尚未接入</button></article>
+      </div>
+    </section>
+
+    <section class="console-panel" id="models">
+      <div class="console-panel-head"><div><h2>模型管理</h2><p>当前平台实际使用的模型</p></div></div>
+      <div class="task-row"><span class="task-icon">S</span><div><b>UTEL-UIUC / SegFormer-large-parking</b><small>停车候选推理</small></div><span>Hugging Face 权重</span><span class="state ready">已使用</span></div>
+    </section>
+  </section>
+</main>
+<script src="/static/platform.js"></script>
+</body>
+</html>

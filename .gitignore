@@ -1,0 +1,26 @@
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# runtime artifacts
+config.yaml
+pipeline.log
+console_watchdog.log
+
+# data / weights (not part of the repository)
+merged_clean/
+sam3_runs/
+quality/
+runs/
+datasets/
+uav_data/
+external_data/
+equipment_data/
+dji_imports/
+models/
+archive/
+
+# misc
+.DS_Store

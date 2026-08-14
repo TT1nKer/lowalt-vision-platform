@@ -1,0 +1,137 @@
+# 示例配置：把 sam3.api_url / gemma.url 换成你的服务地址，
+# 另存为 config.yaml 后再启动控制台。
+#  WMTS 停车设施识别 profile
+paths:
+  merged_dir: imagery
+  results_root: sam3_runs
+  log_file: pipeline.log
+
+sam3:
+  api_url: http://127.0.0.1:8000/sam3/segment
+  text_prompt: parking area
+  show_box: true
+  timeout: 60
+  retry: 3
+  prompt_mode: batch
+  batch_name: parking_wmts_v1
+  prompts:
+    - parking lot
+    - off-street surface parking area
+
+merge:
+  mask_iou_threshold: 0.55
+  bbox_iou_threshold: 0.65
+  representative: confidence
+  min_confidence: 0.0
+
+infer:
+  workers: 8
+  save_render: true
+  save_mask: true
+  batch_concurrency: 4
+
+geo:
+  zoom: 18
+
+block:
+  pixel_size: 1024
+
+aggregate:
+  min_confidence: 0.0
+  only_classes: []
+
+web:
+  workers: 8
+  bake_workers: 4
+  train_timeout_seconds: 0
+
+yolo_obb:
+  min_confidence: 0.0
+  min_mask_area: 10
+  class_names: []
+  class_source: ""
+  require: {}
+  exclude_classes:
+    - non_target
+    - unknown
+  quality:
+    enforce: true
+    require_fixed_test: true
+    require_golden_manifest: true
+    require_review_provenance: true
+    min_human_review_fraction: 0.05
+    golden_manifest: quality/golden_test_manifest.json
+    min_test_images: 100
+    max_object_area_ratio: 0.08
+    max_oversized_fraction: 0.005
+    max_aspect_ratio: 8.0
+    max_extreme_aspect_fraction: 0.01
+    max_duplicate_fraction: 0.005
+    max_class_conflict_fraction: 0.002
+    max_objects_per_image: 120
+    geometry_exempt_classes:
+      - parking_area
+  split:
+    mode: stable_hash
+    train: 0.8
+    val: 0.1
+    test: 0.1
+    fixed_test_list: ""
+
+train:
+  model: yolo11n-seg.pt
+  imgsz: 1024
+  epochs: 200
+  workers: 0
+  device: 0
+  model_mirrors: []
+
+evaluation:
+  require_quality_pass: true
+  require_class_compatibility: true
+  min_precision: 0.75
+  min_recall: 0.75
+  min_map50_95: 0.60
+  max_regression: 0.02
+
+gemma:
+  enabled: true
+  url: "http://127.0.0.1:9998/v1/chat/completions"
+  schema: openai
+  model: "/home/admin/models/gemma-4-31B-it"
+  api_key: ""
+  image_mode: both
+  crop_padding: 0.7
+  mask_style: outline
+  timeout: 120
+  editable_prompt: true
+  allowed_labels: []
+  structured_output: true
+  min_confidence: 0.3
+  min_prompt_hits: 2
+  target_concept: "off-street surface parking areas"
+  object_types:
+    - parking_area
+    - non_target
+    - unknown
+  issue_types:
+    - normal
+    - double_parked
+    - boundary_violation
+    - unknown
+  condition_types:
+    - normal
+    - abnormal
+    - unknown
+  positive_rules:
+    - "target is an off-street surface parking facility or parking area"
+    - "mask covers the connected parking facility rather than an individual vehicle"
+  negative_rules:
+    - "buildings, trees, roads outside the parking lot are NOT targets"
+    - "individual vehicles and individual parking stalls are NOT separate targets"
+    - "roads, farmland, water, roofs, and ordinary paved yards are NOT parking facilities"
+    - "unclear target, heavy occlusion, or grossly misplaced mask — do NOT auto-accept"
+  unverifiable_rules:
+    - "vehicle make, model, or license plate number"
+    - "whether the vehicle has a valid parking permit"
+    - "payment status or time limits"

@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+pyyaml
+requests
+pillow
+numpy
+opencv-python
+shapely>=2.0,<3
+ultralytics
+transformers==4.44.2
+huggingface-hub==0.24.7

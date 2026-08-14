@@ -1,0 +1,123 @@
+# 停车场车位检测 profile
+# 用法：cp profiles/pklot.yaml config.yaml  然后按需改
+
+paths:
+  merged_dir: H:\pklotdataset\train\images
+  results_root: sam3_runs
+  log_file: pipeline.log
+
+sam3:
+  api_url: http://127.0.0.1:8000/sam3/segment
+  show_box: true
+  timeout: 60
+  retry: 3
+  prompt_mode: batch
+  batch_name: pklot_v1
+  text_prompt: parking space
+  prompts:
+    - parking space
+    - empty parking stall
+    - occupied parking space
+    - parked car
+    - vehicle in parking lot
+    - parking lot
+    - empty spot
+    - parked vehicle
+    - car in parking spot
+    - parking area
+
+infer:
+  workers: 8
+  save_render: true
+  save_mask: true
+  batch_concurrency: 4
+
+merge:
+  mask_iou_threshold: 0.55
+  bbox_iou_threshold: 0.65
+  representative: confidence
+  min_confidence: 0.0
+
+geo:
+  zoom: 18
+
+block:
+  pixel_size: 1024
+
+aggregate:
+  min_confidence: 0.0
+  only_classes: []
+
+web:
+  workers: 8
+  bake_workers: 4
+
+gemma:
+  enabled: true
+  url: "http://127.0.0.1:9998/v1/chat/completions"
+  schema: openai
+  model: "/home/admin/models/gemma-4-31B-it"
+  api_key: ""
+  image_mode: both
+  crop_padding: 0.7
+  mask_style: outline
+  timeout: 120
+  editable_prompt: true
+  allowed_labels: []
+  structured_output: true
+  min_confidence: 0.3
+  min_prompt_hits: 2
+  target_concept: "parking spaces, vehicles, and parking lot markings"
+  object_types:
+    - empty_parking_space
+    - occupied_parking_space
+    - vehicle
+    - parking_spot_marking
+    - non_target
+    - unknown
+  issue_types:
+    - normal
+    - double_parked
+    - boundary_violation
+    - unknown
+  condition_types:
+    - normal
+    - abnormal
+    - unknown
+  positive_rules:
+    - "target is a clearly visible parking space (empty or occupied)"
+    - "target is a vehicle parked within or near a parking space"
+    - "mask or OBB roughly covers the main body of the target vehicle or parking space boundary"
+  negative_rules:
+    - "buildings, trees, roads outside the parking lot are NOT targets"
+    - "pedestrians, shopping carts, small debris are NOT targets"
+    - "license plates or vehicle parts alone are NOT separate targets"
+    - "unclear target, heavy occlusion, or grossly misplaced mask — do NOT auto-accept"
+  unverifiable_rules:
+    - "vehicle make, model, or license plate number"
+    - "whether the vehicle has a valid parking permit"
+    - "payment status or time limits"
+
+yolo_obb:
+  min_confidence: 0.0
+  min_mask_area: 10
+  class_names: []
+  class_source: "semantic.object_type"
+  require: {}
+  exclude_classes:
+    - non_target
+    - unknown
+  split:
+    mode: stable_hash
+    train: 0.8
+    val: 0.1
+    test: 0.1
+    fixed_test_list: ""
+
+train:
+  model: yolov8s-obb.pt
+  imgsz: 1024
+  epochs: 200
+  workers: 0
+  device: 0
+  model_mirrors: []

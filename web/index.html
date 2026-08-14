@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>视觉任务控制台 · 低空遥感智能分析平台</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/app.css?v=20260813a">
+</head>
+<body>
+<div class="modern-app">
+  <aside class="modern-sidebar">
+    <div class="modern-logo">
+      <span class="modern-logo-mark" aria-hidden="true">◈</span>
+      <span>低空遥感视觉<small>智能分析平台</small></span>
+    </div>
+    <div class="modern-nav-label">业务工作区</div>
+    <nav class="modern-nav" aria-label="主导航">
+      <a class="active" href="/"><span class="modern-nav-glyph">⌂</span><span>任务控制台</span></a>
+      <a href="/review"><span class="modern-nav-glyph">✓</span><span>结果审核</span></a>
+      <a href="/report"><span class="modern-nav-glyph">▤</span><span>分析报告</span></a>
+      <a href="/test"><span class="modern-nav-glyph">⌁</span><span>模型验证</span></a>
+      <a href="/files"><span class="modern-nav-glyph">□</span><span>数据管理</span></a>
+    </nav>
+    <div class="modern-nav-sep"></div>
+    <div class="modern-project">
+      <div class="modern-project-label">当前数据源</div>
+      <div class="modern-project-name" id="projectName">正在加载…</div>
+      <div class="modern-project-state"><i></i><span id="serviceState">平台服务正常</span></div>
+    </div>
+  </aside>
+
+  <div class="modern-main">
+    <header class="modern-topbar">
+      <div class="modern-crumb"><strong>低空遥感智能分析平台</strong> / 任务控制台</div>
+      <div class="modern-user"><span id="healthText">正在检查服务</span><span class="modern-avatar">SX</span></div>
+    </header>
+
+    <main class="modern-content vision-console">
+      <section class="modern-page-head vision-heading">
+        <div>
+          <span class="vision-eyebrow">VISION WORKSPACE</span>
+          <h1>视觉任务控制台</h1>
+          <p id="pageSummary">正在读取当前任务…</p>
+        </div>
+        <div class="modern-actions">
+          <button class="modern-btn" id="configureTaskButton" type="button">配置识别目标</button>
+          <a class="modern-btn primary" href="/review">查看识别结果</a>
+        </div>
+      </section>
+
+      <section class="vision-task-banner modern-card" aria-labelledby="activeTaskTitle">
+        <div class="vision-task-copy">
+          <span class="vision-section-label">当前任务</span>
+          <h2 id="activeTaskTitle">正在加载识别目标</h2>
+          <p>使用通用视觉模型发现目标，经语义筛选形成可训练数据，最终生成适合现场设备运行的轻量模型。</p>
+        </div>
+        <div class="vision-next-action">
+          <span>建议下一步</span>
+          <strong id="nextActionText">读取任务状态中</strong>
+          <button class="modern-btn primary" id="nextActionButton" type="button" disabled>请稍候</button>
+        </div>
+      </section>
+
+      <section class="modern-kpis" aria-label="当前任务指标">
+        <article class="modern-card modern-kpi"><div class="modern-kpi-head"><span>候选目标</span><span class="modern-kpi-icon">⌘</span></div><div class="modern-kpi-value" id="targetCount">—</div><div class="modern-kpi-foot">SAM3 或现有模型发现的目标</div></article>
+        <article class="modern-card modern-kpi"><div class="modern-kpi-head"><span>已分类</span><span class="modern-kpi-icon">✓</span></div><div class="modern-kpi-value" id="reviewedCount">—</div><div class="modern-kpi-foot" id="reviewNote">等待建立目标索引</div></article>
+        <article class="modern-card modern-kpi"><div class="modern-kpi-head"><span>可用目标</span><span class="modern-kpi-icon">◆</span></div><div class="modern-kpi-value" id="positiveCount">—</div><div class="modern-kpi-foot good">当前确认可用于数据生成</div></article>
+        <article class="modern-card modern-kpi"><div class="modern-kpi-head"><span>轻量模型数据</span><span class="modern-kpi-icon">↗</span></div><div class="modern-kpi-value" id="datasetState">—</div><div class="modern-kpi-foot" id="datasetNote">正在检查数据集状态</div></article>
+      </section>
+
+      <section class="modern-card vision-pipeline" aria-labelledby="pipelineTitle">
+        <div class="modern-card-head">
+          <div><h2 class="modern-card-title" id="pipelineTitle">任务处理流程</h2><p class="modern-card-sub">每一步都可以单独运行、停止和继续。</p></div>
+          <span class="modern-link" id="runLabel">任务空间：—</span>
+        </div>
+        <div class="vision-stage-list">
+          <article class="vision-stage" data-stage="source"><span class="vision-stage-number">01</span><div><h3>定义目标</h3><p>选择图片数据，描述需要识别的对象和判断标准。</p></div><button class="modern-btn" type="button" data-command="configure">配置任务</button></article>
+          <article class="vision-stage" data-stage="discover"><span class="vision-stage-number">02</span><div><h3>发现目标</h3><p>SAM3 按目标描述生成候选区域、mask 和坐标。</p></div><button class="modern-btn" type="button" data-job="p1_all">运行 SAM3</button></article>
+          <article class="vision-stage" data-stage="refine"><span class="vision-stage-number">03</span><div><h3>筛选结果</h3><p>Gemma 批量判断候选；不确定目标可在审核页抽查。</p></div><button class="modern-btn" type="button" data-command="gemma-start">启动筛选</button></article>
+          <article class="vision-stage" data-stage="dataset"><span class="vision-stage-number">04</span><div><h3>生成训练数据</h3><p>将确认结果导出为分割或旋转框数据，并执行质量检查。</p></div><button class="modern-btn" type="button" data-job="p3_export" data-job-params='{"fmt":"seg"}'>生成分割数据</button></article>
+          <article class="vision-stage" data-stage="model"><span class="vision-stage-number">05</span><div><h3>训练轻量模型</h3><p>训练 YOLO 等现场模型，并使用独立数据验证效果。</p></div><button class="modern-btn" type="button" data-command="train-open">训练设置</button></article>
+        </div>
+      </section>
+
+      <section class="vision-workspace-grid">
+        <article class="modern-card vision-operations">
+          <div class="modern-card-head"><div><h2 class="modern-card-title">处理控制</h2><p class="modern-card-sub">只显示当前系统真实支持的操作。</p></div></div>
+          <div class="vision-operation-groups">
+            <div class="vision-operation-group">
+              <div><strong>目标发现</strong><span>运行或修复 SAM3 识别结果</span></div>
+              <div class="modern-actions"><button class="modern-btn primary" type="button" data-job="p1_all">完整识别</button><button class="modern-btn" type="button" data-job="p1_infer">仅重新识别</button><button class="modern-btn" type="button" data-job="p1_coords">计算坐标</button><button class="modern-btn" type="button" data-job="p1_aggregate">重新汇总</button></div>
+            </div>
+            <div class="vision-operation-group">
+              <div><strong>语义筛选</strong><span>批量处理确定目标，保留人工抽查入口</span></div>
+              <div class="modern-actions"><button class="modern-btn primary" type="button" data-command="gemma-start">启动 Gemma</button><button class="modern-btn" type="button" data-command="gemma-stop">停止 Gemma</button><a class="modern-btn" href="/review">进入审核页</a><button class="modern-btn" type="button" data-job="p2_index">重建索引</button></div>
+            </div>
+            <div class="vision-operation-group">
+              <div><strong>数据输出</strong><span>分割适合区域目标，旋转框适合方向明确的实体</span></div>
+              <div class="modern-actions"><button class="modern-btn primary" type="button" data-job="p3_export" data-job-params='{"fmt":"seg"}'>导出分割数据</button><button class="modern-btn" type="button" data-job="p3_export" data-job-params='{"fmt":"obb"}'>导出旋转框数据</button><button class="modern-btn" type="button" data-job="p3_audit">检查数据质量</button><a class="modern-btn" href="/files">查看数据文件</a></div>
+            </div>
+          </div>
+        </article>
+
+        <aside class="modern-card vision-health">
+          <div class="modern-card-head"><div><h2 class="modern-card-title">运行环境</h2><p class="modern-card-sub">服务与数据就绪状态</p></div></div>
+          <div class="modern-status">
+            <div class="modern-status-row"><span class="modern-status-left"><i class="modern-status-dot" id="samDot"></i>SAM3 服务</span><strong id="samState">检测中</strong></div>
+            <div class="modern-status-row"><span class="modern-status-left"><i class="modern-status-dot" id="gemmaDot"></i>Gemma 服务</span><strong id="gemmaState">检测中</strong></div>
+            <div class="modern-status-row"><span class="modern-status-left"><i class="modern-status-dot" id="indexDot"></i>目标索引</span><strong id="indexState">检查中</strong></div>
+            <div class="modern-status-row"><span class="modern-status-left"><i class="modern-status-dot" id="exportDot"></i>训练数据</span><strong id="exportState">检查中</strong></div>
+          </div>
+          <a class="vision-health-link" href="/test">打开模型验证工具 <span>→</span></a>
+        </aside>
+      </section>
+
+      <section class="modern-card modern-job vision-job">
+        <div class="modern-job-top"><div><h2 class="modern-card-title">任务运行中心</h2><p class="modern-card-sub" id="jobtext">暂无进行中的任务</p></div><div class="modern-actions"><button class="modern-btn" id="cancelJobButton" type="button">取消任务</button><span class="modern-badge" id="jobState">待命</span></div></div>
+        <div class="modern-progress"><i id="jobbar" style="width:0%"></i></div>
+        <div class="modern-log" id="joblog" role="log" aria-live="polite"></div>
+      </section>
+
+      <section class="modern-card vision-training" id="trainingSettings">
+        <details>
+          <summary>轻量模型训练设置</summary>
+          <div class="modern-advanced-body">
+            <p class="vision-field-note">训练前应先完成数据质量检查；研究候选数据不能作为正式验收结果。</p>
+            <div class="modern-settings">
+              <label>基础模型<input id="train_model" value="yolo11n-seg.pt"></label>
+              <label>输入尺寸<input id="train_imgsz" inputmode="numeric" value="1024"></label>
+              <label>训练轮数<input id="train_epochs" inputmode="numeric" value="100"></label>
+            </div>
+            <div class="modern-extra-actions"><button class="modern-btn primary" id="startTrainButton" type="button">开始训练</button><button class="modern-btn" id="resumeTrainButton" type="button">继续上次训练</button><a class="modern-btn" href="/test">验证已有模型</a></div>
+          </div>
+        </details>
+      </section>
+    </main>
+  </div>
+</div>
+
+<dialog class="vision-task-dialog" id="taskDialog" aria-labelledby="taskDialogTitle">
+  <form method="dialog" class="vision-dialog-head"><div><span class="vision-section-label">新建或切换任务</span><h2 id="taskDialogTitle">配置识别目标</h2></div><button class="vision-dialog-close" value="cancel" aria-label="关闭">×</button></form>
+  <div class="vision-dialog-body">
+    <label class="vision-domain-field">需要识别什么对象？<textarea id="taskDomain" rows="4" placeholder="例如：识别无人机影像中的挖掘机；保留完整机械主体，排除普通货车和建筑设备。"></textarea></label>
+    <p class="vision-field-note">系统会生成 SAM3 提示词和 Gemma 判断规则。生成配置不会立即运行任务。</p>
+    <div class="modern-actions"><button class="modern-btn primary" id="generateTaskButton" type="button">生成任务配置</button><button class="modern-btn" id="applyTaskButton" type="button" disabled>应用此配置</button></div>
+    <div class="vision-config-preview" id="taskConfigPreview" hidden></div>
+  </div>
+</dialog>
+
+<script src="/static/app.js?v=20260813a"></script>
+<script src="/static/console.js?v=20260813a"></script>
+</body>
+</html>
