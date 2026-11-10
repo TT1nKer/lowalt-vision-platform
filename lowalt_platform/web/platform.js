@@ -21,8 +21,16 @@ async function loadEngineering() {
   const progress = $('#secondaryProgress');
   const completed = summary.secondary_analysis.completed;
   const total = summary.secondary_analysis.total;
-  progress.textContent = `${formatNumber(completed)} / ${formatNumber(total)}`;
-  progress.className = `state ${completed === total ? 'ready' : 'pending'}`;
+  progress.textContent = total ? `${formatNumber(completed)} / ${formatNumber(total)}` : '无候选数据';
+  progress.className = `state ${total > 0 && completed === total ? 'ready' : 'pending'}`;
+  const candidateStatus = $('#candidateTaskStatus');
+  candidateStatus.textContent = total ? '候选已载入' : '无候选数据';
+  candidateStatus.className = `state ${total ? 'ready' : 'pending'}`;
+  const modelStatus = $('#parkingModelStatus');
+  modelStatus.textContent = summary.parking_model.available ? '可用（未验证推理）' : '未配置或依赖缺失';
+  modelStatus.className = `state ${summary.parking_model.available ? 'ready' : 'pending'}`;
+  modelStatus.title = summary.parking_model.reason || '';
+  $('#importHint').textContent = `允许的源目录：${summary.import_source_roots}`;
   bindImportControls();
   loadImportRuns();
 }
@@ -32,6 +40,7 @@ const importStatusPresentation = {
   running: ['导入中', 'pending'],
   done: ['已完成', 'ready'],
   error: ['失败', 'error'],
+  partial: ['部分失败', 'error'],
 };
 
 function bindImportControls() {
@@ -151,7 +160,7 @@ function renderImportRuns(runs) {
     row.appendChild(analysisCell);
     const actions = document.createElement('div');
     actions.className = 'model-actions';
-    if (run.status === 'done' && run.assets > 0) {
+    if (['done', 'partial'].includes(run.status) && run.assets > 0) {
       const analyze = document.createElement('button');
       analyze.className = 'button';
       analyze.type = 'button';
@@ -159,9 +168,16 @@ function renderImportRuns(runs) {
       analyze.addEventListener('click', () => startParkingAnalysis(run.run_id));
       actions.appendChild(analyze);
     }
+    if (['done', 'partial'].includes(run.status)) {
+      const download = document.createElement('a');
+      download.className = 'button';
+      download.href = `/api/platform/imports/${encodeURIComponent(run.run_id)}/export`;
+      download.textContent = '下载证据包';
+      actions.appendChild(download);
+    }
     const mapLink = document.createElement('a');
     mapLink.className = 'button';
-    mapLink.href = '/';
+    mapLink.href = `/?import_run=${encodeURIComponent(run.run_id)}`;
     mapLink.textContent = '地图查看';
     actions.appendChild(mapLink);
     row.appendChild(actions);
@@ -214,12 +230,17 @@ async function loadMapPage() {
     capabilities.appendChild(button);
   });
 
-  const [west, south, east, north] = summary.overview.bounds;
-  const imageBounds = [[south, west], [north, east]];
-  const map = L.map('map', { crs: L.CRS.EPSG4326, zoomControl: false, attributionControl: false, minZoom: 8, maxZoom: 20 });
+  const map = L.map('map', { crs: L.CRS.EPSG4326, zoomControl: false, attributionControl: false, minZoom: 2, maxZoom: 20 });
   L.control.zoom({ position: 'bottomleft' }).addTo(map);
-  const overviewLayer = L.imageOverlay(summary.overview.image_url, imageBounds, { opacity: 1, alt: '全域正射影像概览' }).addTo(map);
-  map.fitBounds(imageBounds, { padding: [18, 18] });
+  let overviewLayer = null;
+  if (summary.overview) {
+    const [west, south, east, north] = summary.overview.bounds;
+    const imageBounds = [[south, west], [north, east]];
+    overviewLayer = L.imageOverlay(summary.overview.image_url, imageBounds, { opacity: 1, alt: '全域正射影像概览' }).addTo(map);
+    map.fitBounds(imageBounds, { padding: [18, 18] });
+  } else {
+    map.setView([0, 0], 2);
+  }
   map.createPane('nativeImagery');
   map.getPane('nativeImagery').style.zIndex = 350;
   map.getPane('nativeImagery').style.pointerEvents = 'none';
@@ -227,6 +248,8 @@ async function loadMapPage() {
   const candidateLayer = L.geoJSON([], { onEachFeature: bindCandidate, style: styleCandidate }).addTo(map);
   const importLayer = L.layerGroup().addTo(map);
   let activeImportRunId = null;
+  const requestedImportRunId = new URLSearchParams(window.location.search).get('import_run');
+  let importBoundsFitted = false;
   let requestVersion = 0;
   let blockRequestVersion = 0;
   let candidateCount = 0;
@@ -249,11 +272,17 @@ async function loadMapPage() {
     if (!toggle || !toggle.checked) { $('#importAssetCount').textContent = '—'; return; }
     try {
       const payload = await getJson('/api/platform/imports');
-      const ready = (payload.runs || []).filter((run) => run.status === 'done' && run.assets > 0);
+      const ready = (payload.runs || []).filter((run) => ['done', 'partial'].includes(run.status) && run.assets > 0);
       if (!ready.length) { $('#importAssetCount').textContent = '0'; return; }
-      activeImportRunId = ready[ready.length - 1].run_id;
+      const selected = requestedImportRunId ? ready.find((run) => run.run_id === requestedImportRunId) : ready[ready.length - 1];
+      if (!selected) { $('#importAssetCount').textContent = '0'; return; }
+      activeImportRunId = selected.run_id;
       const collection = await getJson(`/api/platform/imports/${encodeURIComponent(activeImportRunId)}/geojson`);
-      L.geoJSON(collection, { pointToLayer: importPointLayer, onEachFeature: bindImportAsset }).addTo(importLayer);
+      const imported = L.geoJSON(collection, { pointToLayer: importPointLayer, onEachFeature: bindImportAsset }).addTo(importLayer);
+      if (!summary.overview && !importBoundsFitted && collection.features.length) {
+        map.fitBounds(imported.getBounds(), { padding: [40, 40], maxZoom: 17 });
+        importBoundsFitted = true;
+      }
       $('#importAssetCount').textContent = formatNumber(collection.features.length);
     } catch (error) {
       $('#importAssetCount').textContent = '—';
@@ -303,7 +332,7 @@ async function loadMapPage() {
     const version = ++blockRequestVersion;
     if (map.getZoom() < 16) {
       nativeImageryLayer.clearLayers();
-      overviewLayer.setOpacity(1);
+      overviewLayer?.setOpacity(1);
       nativeBlockCount = null;
       renderMapStatus();
       return;
@@ -321,7 +350,7 @@ async function loadMapPage() {
         alt: block.block_id,
       }).addTo(nativeImageryLayer);
     });
-    overviewLayer.setOpacity(.12);
+    overviewLayer?.setOpacity(.12);
     nativeBlockCount = payload.blocks.length;
     renderMapStatus();
   }
@@ -386,7 +415,10 @@ function buildImportPopup(runId, properties) {
   image.alt = '导入素材影像';
   box.appendChild(image);
   const meta = document.createElement('p');
-  meta.textContent = `${properties.kind === 'frame' ? '视频抽帧' : 'DJI 图片'} · ${properties.gps_source}`;
+  const video = properties.video;
+  const observation = video && video.srt_name ? ` · ${video.srt_name} · Δ${video.srt_delta_seconds}s` : '';
+  meta.textContent = `${properties.kind === 'frame' ? '视频抽帧' : 'DJI 图片'} · ${properties.gps_source}${observation} · 未审核 · 相机位置`;
+
   box.appendChild(meta);
   if (properties.captured_at) {
     const captured = document.createElement('p');

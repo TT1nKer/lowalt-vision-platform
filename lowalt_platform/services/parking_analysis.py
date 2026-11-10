@@ -40,7 +40,7 @@ class ParkingAnalysisService:
             import torch  # noqa: F401
             import transformers  # noqa: F401
 
-            import parkseg12k_infer  # noqa: F401
+            from training import parkseg12k_infer  # noqa: F401
         except ImportError as exc:
             return False, f"依赖缺失: {exc}"
         return True, None

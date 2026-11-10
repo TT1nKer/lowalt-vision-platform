@@ -62,13 +62,13 @@ class SrtParsingTests(unittest.TestCase):
         self.assertAlmostEqual(records[0]["longitude"], 121.50)
         self.assertAlmostEqual(records[0]["altitude_m"], 8.0)
 
-    def test_nearest_position_labels_exact_interpolated_and_none(self) -> None:
+    def test_nearest_position_labels_near_nearest_and_none(self) -> None:
         records = parse_srt(DJI_SRT)
         _, exact = srt_nearest_position(records, 1.05)
         self.assertEqual(exact, "srt_frame")
         record, interpolated = srt_nearest_position(records, 6.0)
         self.assertIsNotNone(record)
-        self.assertEqual(interpolated, "srt_interpolated")
+        self.assertEqual(interpolated, "srt_nearest")
         record, none_source = srt_nearest_position(records, 60.0)
         self.assertIsNone(record)
         self.assertEqual(none_source, "none")

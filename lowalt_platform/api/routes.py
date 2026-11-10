@@ -4,8 +4,11 @@ import json
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from starlette.background import BackgroundTask
 from fastapi.responses import FileResponse, HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from lowalt_platform.domain import CandidateSummary
 
 from lowalt_platform.services import ParkingCatalog, WmtsBlockCatalog
 from lowalt_platform.services.import_runner import ImportService
@@ -20,7 +23,7 @@ class ImportScanRequest(BaseModel):
 class ImportCreateRequest(BaseModel):
     source_dir: str
     name: str | None = None
-    frame_stride: int | None = None
+    frame_stride: int = Field(default=30, ge=1, le=600, strict=True)
 
 
 class ImportAnalyzeRequest(BaseModel):
@@ -46,14 +49,15 @@ def _optional_bounds(
 
 
 def create_platform_app(settings: PlatformSettings) -> FastAPI:
-    catalog = ParkingCatalog.from_paths(
-        settings.candidate_geojson,
-        settings.candidate_summary,
-        settings.image_root,
-        settings.mask_root,
-    )
+    if not settings.candidate_geojson.exists() and not settings.candidate_summary.exists():
+        catalog = ParkingCatalog([], CandidateSummary(0, 0, 0, 0), settings.image_root, settings.mask_root)
+    else:
+        catalog = ParkingCatalog.from_paths(
+            settings.candidate_geojson, settings.candidate_summary, settings.image_root, settings.mask_root,
+        )
     imagery = WmtsBlockCatalog(settings.image_root)
-    overview = json.loads(settings.overview_manifest.read_text(encoding="utf-8"))
+    overview = (json.loads(settings.overview_manifest.read_text(encoding='utf-8'))
+                if settings.overview_manifest.is_file() and settings.overview_image.is_file() else None)
     app = FastAPI(title="低空遥感智能分析平台")
     import_service = ImportService(
         settings.import_root or settings.project_root / "dji_imports",
@@ -73,10 +77,13 @@ def create_platform_app(settings: PlatformSettings) -> FastAPI:
         completed_secondary_analyses = sum(
             1 for path in settings.secondary_analysis_root.glob("*/manifest.json") if path.is_file()
         )
+        model_available, model_reason = parking_service.availability()
         return {
+            "parking_model": {"available": model_available, "reason": model_reason},
+            "import_source_roots": import_service.allowed_roots_text(),
             "project": "低空遥感智能分析平台",
-            "imagery": {"source": "imagery WMTS", "count": overview["image_count"]},
-            "overview": {"bounds": overview["bounds"], "image_url": "/api/platform/overview"},
+            "imagery": {"source": "imagery WMTS", "count": overview["image_count"] if overview else len(imagery)},
+            "overview": {"bounds": overview["bounds"], "image_url": "/api/platform/overview"} if overview else None,
             "parking_candidates": {
                 "total": counts.total,
                 "segformer_only": counts.segformer_only,
@@ -226,7 +233,7 @@ def create_platform_app(settings: PlatformSettings) -> FastAPI:
             run_id = import_service.create_run(request.source_dir, request.name)
         except ValueError as exc:
             raise HTTPException(400, detail=str(exc)) from exc
-        import_service.start_import_thread(run_id, request.frame_stride or 30)
+        import_service.start_import_thread(run_id, request.frame_stride)
         return {"run_id": run_id}
 
     @app.get("/api/platform/imports/{run_id}")
@@ -270,13 +277,24 @@ def create_platform_app(settings: PlatformSettings) -> FastAPI:
         except KeyError as exc:
             raise HTTPException(404, detail=str(exc)) from exc
 
+    @app.get('/api/platform/imports/{run_id}/export')
+    def import_export(run_id: str) -> FileResponse:
+        try:
+            path = import_service.export_evidence(run_id)
+        except KeyError as exc:
+            raise HTTPException(404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(409, detail=str(exc)) from exc
+        return FileResponse(path, media_type='application/zip', filename=f'{run_id}-evidence.zip',
+                            background=BackgroundTask(path.unlink, missing_ok=True))
+
     @app.get("/api/platform/imports/{run_id}/assets/{asset_id}/image")
     def import_asset_image(run_id: str, asset_id: str) -> FileResponse:
         try:
             path = import_service.asset_path(run_id, asset_id)
         except KeyError as exc:
             raise HTTPException(404, detail=str(exc)) from exc
-        return FileResponse(path, media_type="image/jpeg")
+        return FileResponse(path)
 
     @app.get("/api/platform/imports/{run_id}/assets/{asset_id}/mask")
     def import_asset_mask(run_id: str, asset_id: str) -> FileResponse:

@@ -1,161 +1,188 @@
 from __future__ import annotations
 
+from datetime import datetime
+import math
 import re
 from pathlib import Path
 
 from PIL import Image
 
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
-VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv"}
-SRT_SUFFIXES = {".srt"}
+IMAGE_SUFFIXES = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'}
+VIDEO_SUFFIXES = {'.mp4', '.mov', '.avi', '.mkv'}
+SRT_SUFFIXES = {'.srt'}
+_NUMBER = r'([+-]?\d+(?:\.\d+)?)'
+_GPS_RE = re.compile(r'GPS\s*\(\s*' + _NUMBER + r'\s*[,，]\s*' + _NUMBER + r'(?:\s*[,，]\s*' + _NUMBER + r')?\s*\)', re.I)
+_SRT_TIME_RE = re.compile(r'(\d{2,}):(\d{2}):(\d{2})[,.](\d{3})')
+_SRT_TIMELINE_RE = re.compile(r'^\s*(\d{2,}:\d{2}:\d{2}[,.]\d{3})\s*-->\s*(\d{2,}:\d{2}:\d{2}[,.]\d{3})\s*$', re.M)
 
-_GPS_RE = re.compile(
-    r"GPS\s*\(\s*(-?\d+\.\d+)\s*[,，]\s*(-?\d+\.\d+)(?:\s*[,，]\s*(-?\d+(?:\.\d+)?))?\s*\)",
-    re.IGNORECASE,
-)
-_ALT_RE = re.compile(r"(?:ALT|H)\s*(-?\d+(?:\.\d+)?)\s*m", re.IGNORECASE)
-_SRT_TIME_RE = re.compile(r"(\d{2}):(\d{2}):(\d{2})[,.](\d{3})")
-_LAT_LON_RE = re.compile(
-    r"(?:lat|纬度)\s*[:=]?\s*(-?\d+\.\d+)\s*[,，;]\s*(?:lon|lng|经度)\s*[:=]?\s*(-?\d+\.\d+)",
-    re.IGNORECASE,
-)
+
+def valid_position(latitude: object, longitude: object) -> bool:
+    try:
+        return (latitude is not None and longitude is not None
+                and math.isfinite(float(latitude)) and math.isfinite(float(longitude))
+                and -90 <= float(latitude) <= 90 and -180 <= float(longitude) <= 180)
+    except (ValueError, TypeError, OverflowError):
+        return False
 
 
 def _exif_text(value: object) -> str | None:
     if value is None:
         return None
     if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace").strip("\x00 ").strip() or None
-    text = str(value).strip("\x00 ").strip()
-    return text or None
+        value = value.decode('utf-8', errors='replace')
+    return str(value).strip('\x00 ').strip() or None
+
+
+def _finite_number(value: object) -> float | None:
+    try:
+        number = float(value)
+        return number if math.isfinite(number) else None
+    except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+        return None
 
 
 def _dms_to_degrees(values: object) -> float | None:
     if not isinstance(values, (tuple, list)) or len(values) != 3:
         return None
-    try:
-        degrees, minutes, seconds = (float(value) for value in values)
-    except (TypeError, ValueError):
+    parts = [_finite_number(value) for value in values]
+    if any(value is None for value in parts):
         return None
-    return degrees + minutes / 60.0 + seconds / 3600.0
+    degrees, minutes, seconds = parts
+    if degrees < 0 or not 0 <= minutes < 60 or not 0 <= seconds < 60:
+        return None
+    return degrees + minutes / 60 + seconds / 3600
 
 
-def _iso_capture_time(value: object) -> str | None:
+def _iso_capture_time(value: object, offset: object = None, subsecond: object = None) -> str | None:
     text = _exif_text(value)
     if not text:
         return None
-    digits = re.sub(r"[^\d]", "", text)
-    if len(digits) < 14:
+    try:
+        result = datetime.strptime(text, '%Y:%m:%d %H:%M:%S').isoformat()
+    except ValueError:
         return None
-    return f"{digits[0:4]}-{digits[4:6]}-{digits[6:8]}T{digits[8:10]}:{digits[10:12]}:{digits[12:14]}"
+    fraction = _exif_text(subsecond)
+    if fraction and fraction.isdigit():
+        result += '.' + fraction
+    zone = _exif_text(offset)
+    if zone and re.fullmatch(r'[+-](?:0\d|1[0-3]):[0-5]\d|[+-]14:00', zone):
+        result += zone
+    return result
 
 
 def extract_image_metadata(path: Path) -> dict:
-    """Return the metadata an imported image can honestly provide.
-
-    Every field is None when the media does not carry it; no values are
-    invented. GPS comes from the EXIF GPS IFD (DJI writes it by default).
-    """
-    metadata: dict = {
-        "latitude": None,
-        "longitude": None,
-        "altitude_m": None,
-        "captured_at": None,
-        "camera_make": None,
-        "camera_model": None,
-        "width": None,
-        "height": None,
-    }
+    """Read EXIF without guessing missing hemispheres, times or physical scale."""
+    metadata = dict.fromkeys(('latitude', 'longitude', 'altitude_m', 'altitude_reference',
+                              'captured_at', 'camera_make', 'camera_model', 'width', 'height'))
+    metadata['warnings'] = []
     with Image.open(path) as image:
-        metadata["width"], metadata["height"] = image.size
+        metadata['width'], metadata['height'] = image.size
         exif = image.getexif()
-        if exif:
-            metadata["camera_make"] = _exif_text(exif.get(0x010F))
-            metadata["camera_model"] = _exif_text(exif.get(0x0110))
-            metadata["captured_at"] = _iso_capture_time(exif.get(0x9003) or exif.get(0x0132))
-        gps = exif.get_ifd(0x8825) if hasattr(exif, "get_ifd") else {}
+        metadata['camera_make'] = _exif_text(exif.get(0x010F))
+        metadata['camera_model'] = _exif_text(exif.get(0x0110))
+        try:
+            photo = exif.get_ifd(0x8769)
+            gps = exif.get_ifd(0x8825)
+        except (ValueError, TypeError, OSError, SyntaxError):
+            photo, gps = {}, {}
+            metadata['warnings'].append('malformed_exif_ifd')
+        metadata['captured_at'] = _iso_capture_time(
+            photo.get(0x9003) or exif.get(0x9003) or exif.get(0x0132),
+            photo.get(0x9011) or exif.get(0x9011),
+            photo.get(0x9291) or exif.get(0x9291),
+        )
         if gps:
-            latitude = _dms_to_degrees(gps.get(2))
-            longitude = _dms_to_degrees(gps.get(4))
-            if latitude is not None and str(gps.get(1)).strip().upper() == "S":
-                latitude = -latitude
-            if longitude is not None and str(gps.get(3)).strip().upper() == "W":
-                longitude = -longitude
-            altitude = gps.get(6)
-            altitude_value = None
-            if isinstance(altitude, (tuple, list)) and altitude:
-                altitude_value = float(altitude[0])
-            elif altitude is not None:
-                try:
-                    altitude_value = float(altitude)
-                except (TypeError, ValueError):
-                    altitude_value = None
-            if altitude_value is not None:
-                metadata["altitude_m"] = round(altitude_value, 1)
-                if str(gps.get(5)).strip() == "1":
-                    metadata["altitude_m"] = -metadata["altitude_m"]
-            if latitude is not None:
-                metadata["latitude"] = round(latitude, 7)
-            if longitude is not None:
-                metadata["longitude"] = round(longitude, 7)
+            latitude, longitude = _dms_to_degrees(gps.get(2)), _dms_to_degrees(gps.get(4))
+            lat_ref, lon_ref = _exif_text(gps.get(1)), _exif_text(gps.get(3))
+            if lat_ref in {'N', 'S'} and lon_ref in {'E', 'W'}:
+                if latitude is not None and lat_ref == 'S':
+                    latitude = -latitude
+                if longitude is not None and lon_ref == 'W':
+                    longitude = -longitude
+                if valid_position(latitude, longitude):
+                    metadata['latitude'], metadata['longitude'] = round(latitude, 7), round(longitude, 7)
+            if metadata['latitude'] is None:
+                metadata['warnings'].append('invalid_or_incomplete_exif_gps')
+            altitude = _finite_number(gps.get(6))
+            ref = gps.get(5)
+            if isinstance(ref, bytes) and len(ref) == 1:
+                ref = ref[0]
+            if altitude is not None and altitude >= 0 and ref in (0, 1):
+                metadata['altitude_m'] = round(altitude * (-1 if ref == 1 else 1), 1)
+                metadata['altitude_reference'] = 'exif_sea_level'
     return metadata
 
 
+def _tag_number(block: str, names: str) -> float | None:
+    match = re.search(r'\b(?:' + names + r')\s*[:=]\s*' + _NUMBER + r'(?=\s|[\],;，)]|$)', block, re.I)
+    return _finite_number(match.group(1)) if match else None
+
+
 def parse_srt(text: str) -> list[dict]:
-    """Parse a DJI subtitle sidecar into time-tagged position records.
-
-    DJI SRT blocks look like:
-
-        1
-        00:00:00,000 --> 00:00:00,500
-        F/2.8, SS 1/50, ISO 100, EV 0, GPS (30.123456, 120.123456, 15.0), D 3.2m, H 2.0m
-
-    Records that contain neither a timestamp nor coordinates are skipped;
-    fields stay None when the sidecar does not carry them.
+    """Supported forms: GPS(latitude, longitude, altitude), lat/lon and DJI
+    [latitude: ...] [longitude: ...] [rel_alt: ... abs_alt: ...]. No axis guessing.
+    Relative H/rel_alt is retained separately, never used as sea-level altitude.
     """
-    records: list[dict] = []
-    blocks = re.split(r"\n\s*\n", text)
-    for block in blocks:
-        time_match = _SRT_TIME_RE.search(block)
-        gps_match = _GPS_RE.search(block)
-        lat_lon_match = _LAT_LON_RE.search(block)
-        if not time_match and not gps_match and not lat_lon_match:
+    records = []
+    for block in re.split(r'\n\s*\n', text.replace('\r\n', '\n').lstrip('\ufeff')):
+        timeline = _SRT_TIMELINE_RE.search(block)
+        if not timeline:
             continue
-        time_seconds = None
-        if time_match:
-            hours, minutes, seconds, millis = (int(part) for part in time_match.groups())
-            time_seconds = hours * 3600 + minutes * 60 + seconds + millis / 1000.0
-        latitude = longitude = altitude_m = None
+        endpoints = [tuple(map(int, _SRT_TIME_RE.fullmatch(value).groups())) for value in timeline.groups()]
+        if any(minutes >= 60 or seconds >= 60 for _, minutes, seconds, _ in endpoints):
+            continue
+        start, end = [hours * 3600 + minutes * 60 + seconds + millis / 1000
+                      for hours, minutes, seconds, millis in endpoints]
+        if end < start:
+            continue
+        latitude = _tag_number(block, 'latitude|lat|纬度')
+        longitude = _tag_number(block, 'longitude|lon|lng|经度')
+        altitude = _tag_number(block, 'abs_alt')
+        altitude_reference = 'srt_absolute_unspecified_datum' if altitude is not None else None
+        relative = _tag_number(block, 'rel_alt')
+        gps_match = _GPS_RE.search(block)
         if gps_match:
-            latitude, longitude = float(gps_match.group(1)), float(gps_match.group(2))
-            if gps_match.group(3):
-                altitude_m = round(float(gps_match.group(3)), 1)
-        elif lat_lon_match:
-            latitude, longitude = float(lat_lon_match.group(1)), float(lat_lon_match.group(2))
-        if altitude_m is None:
-            altitude_match = _ALT_RE.search(block)
-            if altitude_match:
-                altitude_m = round(float(altitude_match.group(1)), 1)
-        records.append(
-            {
-                "time_seconds": time_seconds,
-                "latitude": latitude,
-                "longitude": longitude,
-                "altitude_m": altitude_m,
-            }
-        )
+            latitude, longitude = float(gps_match[1]), float(gps_match[2])
+            if altitude is None and gps_match[3]:
+                altitude = _finite_number(gps_match[3])
+                altitude_reference = 'srt_unspecified'
+        if altitude is None:
+            alt_match = re.search(r'\bALT\s*' + _NUMBER + r'\s*m', block, re.I)
+            if alt_match:
+                altitude, altitude_reference = _finite_number(alt_match[1]), 'srt_unspecified'
+        if relative is None:
+            height = re.search(r'\bH\s*' + _NUMBER + r'\s*m', block, re.I)
+            relative = _finite_number(height[1]) if height else None
+        if not valid_position(latitude, longitude):
+            latitude = longitude = None
+        records.append({
+            'time_seconds': start,
+            'end_time_seconds': end,
+            'latitude': latitude, 'longitude': longitude,
+            'altitude_m': round(altitude, 1) if altitude is not None else None,
+            'altitude_reference': altitude_reference,
+            'relative_altitude_m': round(relative, 1) if relative is not None else None,
+            'record_index': len(records),
+        })
     return records
 
 
 def srt_nearest_position(records: list[dict], time_seconds: float, tolerance: float = 5.0) -> tuple[dict | None, str]:
-    """Return the nearest positioned SRT record and how it was matched."""
-    positioned = [record for record in records if record.get("time_seconds") is not None and record.get("latitude") is not None]
+    """Nearest observation within tolerance; never claim interpolation occurred.
+
+    srt_frame is a near observation (<=1 s), not guaranteed frame-exact GPS.
+    All other accepted observations are explicitly srt_nearest.
+    """
+    if not math.isfinite(time_seconds) or time_seconds < 0 or not math.isfinite(tolerance) or tolerance < 0:
+        return None, 'none'
+    positioned = [record for record in records
+                  if _finite_number(record.get('time_seconds')) is not None
+                  and record['time_seconds'] >= 0
+                  and valid_position(record.get('latitude'), record.get('longitude'))]
     if not positioned:
-        return None, "none"
-    nearest = min(positioned, key=lambda record: abs(record["time_seconds"] - time_seconds))
-    delta = abs(nearest["time_seconds"] - time_seconds)
-    if delta <= 1.0:
-        return nearest, "srt_frame"
-    if delta <= tolerance:
-        return nearest, "srt_interpolated"
-    return None, "none"
+        return None, 'none'
+    nearest = min(positioned, key=lambda record: abs(record['time_seconds'] - time_seconds))
+    delta = abs(nearest['time_seconds'] - time_seconds)
+    if delta > tolerance:
+        return None, 'none'
+    return nearest, 'srt_frame' if delta <= 1.0 else 'srt_nearest'

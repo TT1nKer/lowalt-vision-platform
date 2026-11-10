@@ -56,10 +56,11 @@ class WmtsBlockCatalog:
                 _latitude(zoom, tile_row),
             )
             blocks.append(WmtsBlock(path.stem, path.resolve(), zoom, bounds))
-        if not blocks:
-            raise ValueError(f"no WMTS block images found in {image_root}")
         self._blocks = blocks
         self._by_id = {block.block_id: block for block in blocks}
+
+    def __len__(self) -> int:
+        return len(self._blocks)
 
     def query(
         self,

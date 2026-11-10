@@ -25,11 +25,6 @@ class PlatformSettings:
     def from_project(cls, project_root: Path) -> "PlatformSettings":
         root = project_root.resolve()
         direct_layers = root / "quality" / "parking_direct_first_layers"
-        candidate_roots = tuple(
-            Path(drive)
-            for drive in ("D:/", "E:/", "F:/", "G:/", "H:/", "C:/Users/sx")
-            if Path(drive).anchor
-        )
         return cls(
             project_root=root,
             candidate_geojson=direct_layers / "parking_facility_candidates.geojson",
@@ -39,9 +34,9 @@ class PlatformSettings:
             secondary_analysis_root=root / "quality" / "parking_secondary_sam3",
             overview_image=root / "quality" / "platform_v1" / "overview.jpg",
             overview_manifest=root / "quality" / "platform_v1" / "overview.json",
-            web_root=root / "lowalt_platform" / "web",
+            web_root=Path(__file__).resolve().parent / "web",
             import_root=root / "dji_imports",
-            allowed_source_roots=candidate_roots,
+            allowed_source_roots=(),
             parking_checkpoint=root / "models" / "segformer_large_parking" / "best_model.ckpt",
             parking_config_dir=root / "models" / "nvidia_mit_b5_config",
             parking_head_checkpoint=root / "models" / "segformer_large_parking_finetuned_head" / "decode_head.pt",
